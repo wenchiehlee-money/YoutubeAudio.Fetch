@@ -1,0 +1,4 @@
+{
+  "_comment": "keys are stems in {channel}_{video_id} format (video_id is the fixed 11-char YouTube ID); values are the audio download URL",
+  "some-channel_dQw4w9WgXcQ": "https://.../some-channel_dQw4w9WgXcQ.m4a"
+}
