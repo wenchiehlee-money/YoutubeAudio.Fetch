@@ -1,2 +1,5 @@
 requests
 python-dotenv
+yt-dlp
+Pillow
+-e ../llm
