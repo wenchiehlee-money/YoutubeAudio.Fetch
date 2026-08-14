@@ -87,6 +87,17 @@ def _format_hhmmss(total_seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
+def _hhmmss_to_seconds(ts: str) -> float:
+    h, m, s = ts.split(":")
+    return int(h) * 3600 + int(m) * 60 + int(s)
+
+
+# Fallback window (seconds) for the last kept moment's transcript excerpt, which has no
+# next moment to bound it — long enough to capture a few sentences, short enough not to
+# dump the rest of the transcript into one row.
+LAST_MOMENT_EXCERPT_WINDOW = 90
+
+
 def parse_srt(path: Path) -> list[SrtCue]:
     content = path.read_text(encoding="utf-8-sig")
     lines = content.splitlines()
@@ -218,7 +229,7 @@ class KeyframeExtractor:
                 kept_moments.append(moment)
             # video_path lives in the TemporaryDirectory; it is removed on context exit.
 
-        index_path = self._write_index_md(stem, srt_path, video_url, out_dir, kept_moments, saved)
+        index_path = self._write_index_md(stem, srt_path, video_url, out_dir, kept_moments, saved, cues)
         print(
             f"[keyframe_extract] done. saved {len(saved)} PNG(s) "
             f"({skipped_duplicates} duplicate(s) skipped) to {out_dir}; index: {index_path}"
@@ -233,25 +244,36 @@ class KeyframeExtractor:
         out_dir: Path,
         moments: list[dict],
         saved: list[Path],
+        cues: list[SrtCue],
     ) -> Path:
-        """Write a per-video Markdown mapping of each kept snapshot to its timestamp
-        and reason, so the PNGs can be browsed/cross-referenced without re-running
-        the LLM pass."""
+        """Write a per-video Markdown mapping of each kept snapshot to its timestamp,
+        an actual transcript excerpt (verbatim text from srt_path spoken between this
+        moment and the next — precise and keyword-searchable, unlike the LLM's one-line
+        guess about what's likely on screen), and that LLM guess as extra context.
+        Lets the PNGs be browsed/cross-referenced without re-running the LLM pass."""
         index_path = out_dir.parent / f"{stem}_keyframes.md"
         lines = [
             f"# {stem} — 關鍵畫面索引",
             "",
-            f"- 來源逐字稿：`{srt_path.name}`",
+            f"- 來源逐字稿：[{srt_path.name}]({srt_path.name})",
             f"- 影片：{video_url}",
             f"- 截圖數：{len(saved)}",
             "",
-            "| 時間碼 | 畫面 | 說明 |",
-            "| --- | --- | --- |",
+            "| 時間碼 | 畫面 | 逐字稿片段 | 話題推測 |",
+            "| --- | --- | --- | --- |",
         ]
-        for moment, path in zip(moments, saved):
+        for i, (moment, path) in enumerate(zip(moments, saved)):
             rel_path = f"{out_dir.name}/{path.name}"
+            start = _hhmmss_to_seconds(moment["timestamp"])
+            end = (
+                _hhmmss_to_seconds(moments[i + 1]["timestamp"])
+                if i + 1 < len(moments)
+                else start + LAST_MOMENT_EXCERPT_WINDOW
+            )
+            excerpt = " ".join(c.text for c in cues if start <= c.start_seconds < end)
+            excerpt = excerpt.replace("|", "\\|") or "（無對應逐字稿內容）"
             reason = moment.get("reason", "").replace("|", "\\|")
-            lines.append(f"| {moment['timestamp']} | ![{path.name}]({rel_path}) | {reason} |")
+            lines.append(f"| {moment['timestamp']} | ![{path.name}]({rel_path}) | {excerpt} | {reason} |")
         index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return index_path
 
