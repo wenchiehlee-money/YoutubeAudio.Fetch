@@ -39,6 +39,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 try:
@@ -89,6 +90,16 @@ def channel_handle_from_url(channel_url: str) -> str | None:
     """Extract the ASCII @handle from a channel URL, e.g. '.../@fubonsec/videos' -> 'fubonsec'."""
     m = HANDLE_IN_URL_RE.search(channel_url)
     return m.group(1) if m else None
+
+
+def _normalize_date(date: str | None) -> str | None:
+    """'YYYY-MM-DD' or 'YYYYMMDD' -> 'YYYYMMDD'. None passes through."""
+    if not date:
+        return None
+    digits = date.replace("-", "")
+    if len(digits) != 8 or not digits.isdigit():
+        raise ValueError(f"date must be YYYY-MM-DD or YYYYMMDD, got: {date!r}")
+    return digits
 
 
 def _pseudo_srt_timestamp(total_seconds: float) -> str:
@@ -194,9 +205,10 @@ class ChannelFetcher:
         return entries, channel_name
 
     def _video_upload_timestamp(self, video_id: str) -> int:
-        """Epoch upload timestamp for ordering candidates pulled from multiple tabs
-        (flat-playlist entries don't carry a usable date). 0 if the lookup fails —
-        such a video sorts last rather than crashing the whole channel fetch."""
+        """Epoch upload timestamp for ordering/filtering candidates pulled from multiple
+        tabs (flat-playlist entries don't carry a usable date). 0 if the lookup fails —
+        such a video sorts last / is excluded from date-range filtering rather than
+        crashing the whole channel fetch."""
         proc = subprocess.run(
             ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, "--skip-download", "--print", "%(timestamp)s",
              f"https://www.youtube.com/watch?v={video_id}"],
@@ -208,16 +220,56 @@ class ChannelFetcher:
         except ValueError:
             return 0
 
-    def list_channel_videos(self, channel_url: str, limit: int) -> list[dict]:
-        """Return up to `limit` videos, newest first, as [{video_id, title, channel}].
+    # Per-tab safety cap when scanning by date range instead of "newest N" — how far
+    # back into a tab's listing to look before giving up on finding `date_after`.
+    DATE_RANGE_CANDIDATE_POOL = 400
 
-        Combines the channel's /videos and /streams tabs (unless the URL already
-        names one explicitly) — channels that mainly post archived livestreams (e.g.
-        a daily morning-show format) put their regular public content under /streams,
-        not /videos, so querying only /videos silently misses it. --flat-playlist
-        entries don't carry a usable date, so once tabs are merged the combined
-        candidate set is re-sorted by an actual per-video upload timestamp lookup.
+    def _resolve_in_range(self, entries: list[dict], date_after: str | None, date_before: str | None) -> list[dict]:
+        """entries: newest-first from one tab (as returned by _list_tab). Resolves each
+        one's real upload date and keeps those within [date_after, date_before]
+        (YYYYMMDD strings, either bound optional). A single tab's listing is
+        monotonically newest-first, so once a resolved date falls before date_after we
+        can stop scanning that tab entirely — bounds the cost for a narrow/recent range
+        instead of always walking the full DATE_RANGE_CANDIDATE_POOL."""
+        matched = []
+        for e in entries:
+            ts = self._video_upload_timestamp(e["video_id"])
+            if ts == 0:
+                continue  # lookup failed; skip rather than mis-include/exclude
+            date_str = datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y%m%d")
+            if date_before and date_str > date_before:
+                continue
+            if date_after and date_str < date_after:
+                break
+            matched.append({**e, "date": date_str, "_ts": ts})
+        return matched
+
+    def list_channel_videos(
+        self,
+        channel_url: str,
+        limit: int | None = 5,
+        date_after: str | None = None,
+        date_before: str | None = None,
+    ) -> list[dict]:
+        """Return videos newest-first as [{video_id, title, channel}].
+
+        Two modes:
+          - "newest N" (default): up to `limit` videos.
+          - date range: pass date_after and/or date_before (YYYY-MM-DD or YYYYMMDD) to
+            get every video in that range instead — `limit`, if also given, caps the
+            result afterward.
+
+        Combines the channel's /videos and /streams tabs (unless the URL already names
+        one explicitly) — channels that mainly post archived livestreams (e.g. a daily
+        morning-show format) put their regular public content under /streams, not
+        /videos, so querying only /videos silently misses it. --flat-playlist entries
+        don't carry a usable date, so ordering (and, in date-range mode, filtering)
+        relies on a real per-video upload timestamp lookup.
         """
+        date_after = _normalize_date(date_after)
+        date_before = _normalize_date(date_before)
+        ranged = bool(date_after or date_before)
+
         url = channel_url.rstrip("/")
         if url.endswith("/videos"):
             tabs = ["videos"]
@@ -228,16 +280,22 @@ class ChannelFetcher:
         else:
             tabs = ["videos", "streams"]
 
+        pool = self.DATE_RANGE_CANDIDATE_POOL if ranged else (limit or 5)
+
         by_id: dict[str, dict] = {}
         channel_name = ""
         for tab in tabs:
-            entries, name = self._list_tab(url, tab, limit)
+            entries, name = self._list_tab(url, tab, pool)
             channel_name = channel_name or name
+            if ranged:
+                entries = self._resolve_in_range(entries, date_after, date_before)
             for e in entries:
                 by_id.setdefault(e["video_id"], e)  # first tab wins on title if seen twice
 
         candidates = list(by_id.values())
-        if len(tabs) > 1 and candidates:
+        if ranged:
+            candidates.sort(key=lambda c: c.get("_ts", 0), reverse=True)
+        elif len(tabs) > 1 and candidates:
             # Each individual tab is already newest-first, but interleaving two such
             # lists by dict-insertion order isn't — resolve real order via per-video
             # timestamp lookups before truncating to `limit`.
@@ -245,11 +303,11 @@ class ChannelFetcher:
                 c["_ts"] = self._video_upload_timestamp(c["video_id"])
             candidates.sort(key=lambda c: c["_ts"], reverse=True)
 
+        if limit is not None:
+            candidates = candidates[:limit]
+
         channel_name = channel_name or "channel"
-        return [
-            {"video_id": c["video_id"], "title": c["title"], "channel": channel_name}
-            for c in candidates[:limit]
-        ]
+        return [{"video_id": c["video_id"], "title": c["title"], "channel": channel_name} for c in candidates]
 
     def fetch_official_transcript(
         self, video_id: str, languages: list[str] | None = None
@@ -344,17 +402,19 @@ class ChannelFetcher:
     def fetch_channel(
         self,
         channel_url: str,
-        limit: int = 5,
+        limit: int | None = 5,
         manifest_path: str | Path = "audio_manifest.json",
         try_official_transcript: bool = True,
         transcript_languages: list[str] | None = None,
+        date_after: str | None = None,
+        date_before: str | None = None,
     ) -> dict[str, int]:
         manifest_path = Path(manifest_path)
         manifest: dict[str, str] = {}
         if manifest_path.exists():
             manifest = {k: v for k, v in json.loads(manifest_path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
-        videos = self.list_channel_videos(channel_url, limit)
+        videos = self.list_channel_videos(channel_url, limit, date_after=date_after, date_before=date_before)
         transcribed_auto = transcribed_manual = added = skipped = failed = 0
         with tempfile.TemporaryDirectory(prefix="channel_fetch_") as tmp:
             tmp_dir = Path(tmp)
@@ -506,9 +566,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    fetch_p = sub.add_parser("fetch", help="Fetch newest N videos' audio from a channel and update the manifest")
+    fetch_p = sub.add_parser("fetch", help="Fetch newest N videos (or a date range) from a channel and update the manifest")
     fetch_p.add_argument("channel_url", help="e.g. https://www.youtube.com/@fubonsec")
-    fetch_p.add_argument("--limit", type=int, default=5, help="Number of newest videos to consider (default 5)")
+    fetch_p.add_argument(
+        "--limit", type=int, default=None,
+        help="Number of newest videos to consider (default 5, unless --date-after/--date-before "
+             "is given, in which case the default is every video in that range)",
+    )
+    fetch_p.add_argument("--date-after", default=None, help="Only videos uploaded on/after this date (YYYY-MM-DD)")
+    fetch_p.add_argument("--date-before", default=None, help="Only videos uploaded on/before this date (YYYY-MM-DD)")
     fetch_p.add_argument("--manifest", default="audio_manifest.json", help="Path to the manifest JSON")
     fetch_p.add_argument("--sync", action="store_true", help="Run whisper_issue_client.sync_manifest afterwards")
     fetch_p.add_argument(
@@ -533,12 +599,17 @@ if __name__ == "__main__":
     fetcher = ChannelFetcher()
 
     if args.cmd == "fetch":
+        limit = args.limit
+        if limit is None and not (args.date_after or args.date_before):
+            limit = 5  # default "newest N" behavior when no date range is given
         fetcher.fetch_channel(
             args.channel_url,
-            limit=args.limit,
+            limit=limit,
             manifest_path=args.manifest,
             try_official_transcript=not args.no_transcript,
             transcript_languages=args.transcript_languages.split(",") if args.transcript_languages else None,
+            date_after=args.date_after,
+            date_before=args.date_before,
         )
         if args.sync:
             sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skill-mlx-api-client-whisper" / "scripts"))

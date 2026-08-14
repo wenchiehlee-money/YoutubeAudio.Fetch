@@ -7,7 +7,7 @@ description: 從 YouTube 財經頻道下載最新影片，優先嘗試官方逐�
 
 | 項目 | 內容 |
 | :--- | :--- |
-| 版本 | 1.2.0（詳見 `metadata.json`） |
+| 版本 | 1.3.0（詳見 `metadata.json`） |
 | 登錄庫 | https://github.com/wenchiehlee/skills （`common/skill-youtube-channel-fetch`） |
 | 維護者 | wenchiehlee |
 | 對應下游 | `skill-mlx-api-client-whisper`（消費本技能寫入的 `audio_manifest.json`，及本技能 `refine` 直接呼叫的 `open_fin_request`） |
@@ -17,7 +17,9 @@ description: 從 YouTube 財經頻道下載最新影片，優先嘗試官方逐�
 `skill-mlx-api-client-whisper` 只負責「manifest 裡已經有 audio_url 的 stem」開 issue 觸發轉錄——
 它不負責從 YouTube 頻道抓新影片。本技能補上這一段：
 
-1. 用 `yt-dlp` 列出頻道最新 N 支影片（`/videos` tab，預設由新到舊排序）
+1. 用 `yt-dlp` 列出頻道影片，預設「最新 N 支」（合併 `/videos` + `/streams` 兩個 tab，由新到
+   舊排序——像每日直播存檔這類頻道，日常內容大多發佈在 `/streams`，只查 `/videos` 會漏掉）；
+   也可以改成「日期區間」模式（見下方方式 E），抓某段期間內的全部影片
 2. 對每支尚未出現在 manifest、也還沒有本地 `FIN.srt` 的影片，**先用
    `youtube-transcript-api` 查詢 YouTube 官方逐字稿**，依 `DEFAULT_TRANSCRIPT_LANGUAGES`
    語言優先序嘗試：`zh-TW, zh-Hant, zh, zh-Hans, zh-CN, en`。依字幕來源分兩種處理：
@@ -100,7 +102,22 @@ python scripts/channel_fetch.py refine --stem yutinghaofinance_v7TpiWK5DTQ
 Mac-mini pipeline 完成後會用同一路徑覆寫 `FIN.srt`（`Source:` 換成真正的 `_exp<N>` 標記），
 之後這個 stem 就不會再被 `refine` 掃到。
 
-### 方式 E：作為模組整合進自己的排程腳本
+### 方式 E：抓某段日期區間內的全部影片（而非「最新 N 支」）
+```bash
+python scripts/channel_fetch.py fetch https://www.youtube.com/@yutinghaofinance \
+    --date-after 2026-08-01 --date-before 2026-08-07
+```
+`--date-after`/`--date-before` 可只給一個（開放區間）；`--flat-playlist` 列表本身不帶日期，
+所以會逐一查詢候選影片的實際上傳時間來過濾（`ChannelFetcher.DATE_RANGE_CANDIDATE_POOL`
+是每個 tab 掃描的安全上限）。給了日期區間時 `--limit` 預設關閉（回傳區間內全部影片），
+除非另外明確指定。
+
+### 方式 F：每日自動排程
+`.github/workflows/daily-channel-fetch.yml` 每天對 repo 根目錄 `channels.json` 列出的每個
+頻道跑 `fetch --limit 5 --sync`；要追蹤新頻道，編輯 `channels.json` 加一行 URL 即可。細節
+與所需的 GitHub Actions Secrets 見本 repo 根目錄 README.md 的「自動化（每日排程）」一節。
+
+### 方式 G：作為模組整合進自己的排程腳本
 ```python
 from scripts.channel_fetch import ChannelFetcher
 
