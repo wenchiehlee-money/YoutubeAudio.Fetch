@@ -6,6 +6,21 @@ whisper 轉錄 pipeline（`skill-mlx-api-server-whisper`），產出人工可校
 選出的 `FIN.srt`。與 `InvestorConference`（法說會音訊）共用同一套 Mac-mini pipeline，差別只在
 `source_type=youtube` 與 stem 命名慣例。
 
+## 內容索引
+
+### [fubonsec](data/fubonsec/)
+
+| 影片 | 日期 |
+| --- | --- |
+| [破解股市利空虛實：台股已從反彈走向反轉？｜富邦投顧 陳奕光 董事長《富邦說趨勢》 EP 91](data/fubonsec/fubonsec_-KLEA_c88xI_keyframes.md) | 2026-08-07 |
+
+### [yutinghaofinance](data/yutinghaofinance/)
+
+| 影片 | 日期 |
+| --- | --- |
+| [2026/8/12(三)GPU金融化狂潮 2008正在重演？兆元商機還是下一場危機？【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_ApykW90PQ58_keyframes.md) | 2026-08-12 |
+| [2026/8/11(二)AI舉債時代 自由現金流能翻正?外資再加空單!台股還能攻?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_v7TpiWK5DTQ_keyframes.md) | 2026-08-11 |
+
 ## 目錄慣例
 ```
 data/{channel}/{channel}_{video_id}_GT.srt   # 人工校正後的 ground truth（單一真相來源）
@@ -40,21 +55,6 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
        --srt data/<channel>/<stem>_FIN.srt \
        --video-url https://www.youtube.com/watch?v=<video_id>
    ```
-
-## 內容索引
-
-### [fubonsec](data/fubonsec/)
-
-| 影片 | 日期 |
-| --- | --- |
-| [破解股市利空虛實：台股已從反彈走向反轉？｜富邦投顧 陳奕光 董事長《富邦說趨勢》 EP 91](data/fubonsec/fubonsec_-KLEA_c88xI_keyframes.md) | 2026-08-07 |
-
-### [yutinghaofinance](data/yutinghaofinance/)
-
-| 影片 | 日期 |
-| --- | --- |
-| [2026/8/12(三)GPU金融化狂潮 2008正在重演？兆元商機還是下一場危機？【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_ApykW90PQ58_keyframes.md) | 2026-08-12 |
-| [2026/8/11(二)AI舉債時代 自由現金流能翻正?外資再加空單!台股還能攻?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_v7TpiWK5DTQ_keyframes.md) | 2026-08-11 |
 
 ## 詳細設計
 
