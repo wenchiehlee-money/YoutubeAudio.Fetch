@@ -1,0 +1,56 @@
+name: Daily channel fetch
+
+on:
+  schedule:
+    - cron: "0 23 * * *"  # ~07:00 Asia/Taipei
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Newest videos to consider per channel"
+        default: "5"
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch each tracked channel
+        env:
+          WHISPER_SOURCE_REPO: wenchiehlee-money/YoutubeAudio.Fetch
+          WHISPER_TARGET_REPO: ZhongZheng782/Mac-mini
+          WHISPER_SOURCE_TYPE: youtube
+          REPO_FILE_SYNC_WENCHIEHLEE_MONEY: ${{ secrets.REPO_FILE_SYNC_WENCHIEHLEE_MONEY }}
+          REPO_FILE_SYNC_ZHONGZHENG782_MONEY: ${{ secrets.REPO_FILE_SYNC_ZHONGZHENG782_MONEY }}
+        run: |
+          LIMIT="${{ github.event.inputs.limit || '5' }}"
+          for url in $(python -c "import json; print('\n'.join(json.load(open('channels.json'))))"); do
+            echo "::group::$url"
+            python skills/skill-youtube-channel-fetch/scripts/channel_fetch.py fetch "$url" --limit "$LIMIT" --sync || echo "::warning::fetch failed for $url"
+            echo "::endgroup::"
+          done
+
+      - name: Regenerate README content index
+        run: python scripts/generate_readme_index.py
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ audio_manifest.json README.md
+          git diff --cached --quiet || git commit -m "chore: daily channel fetch [skip ci]"
+          git push
