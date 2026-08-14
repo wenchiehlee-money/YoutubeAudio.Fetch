@@ -166,37 +166,90 @@ class ChannelFetcher:
 
     # -- yt-dlp -----------------------------------------------------------
 
-    def list_channel_videos(self, channel_url: str, limit: int) -> list[dict]:
-        """Return up to `limit` videos, newest first, as [{video_id, title, channel}]."""
-        url = channel_url.rstrip("/")
-        if not url.endswith(("/videos", "/streams")):
-            url += "/videos"
+    def _list_tab(self, channel_url: str, tab: str, limit: int) -> tuple[list[dict], str]:
+        """Flat-playlist a single channel tab (/videos or /streams). Returns
+        ([{video_id, title}], channel_name) — channel_name is best-effort per this
+        one tab's response and may be empty for a tab with zero entries."""
+        url = channel_url.rstrip("/") + f"/{tab}"
         proc = subprocess.run(
             ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, "--flat-playlist", "--playlist-end", str(limit), "-J", url],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode != 0:
-            raise RuntimeError(f"yt-dlp listing failed: {proc.stderr[:500]}")
+            raise RuntimeError(f"yt-dlp listing failed ({tab}): {proc.stderr[:500]}")
         data = json.loads(proc.stdout)
-        entries = data.get("entries", [])[:limit]
-        # Prefer the ASCII @handle from the input URL — many channel display names
-        # (data["channel"]/["uploader"]) are non-ASCII (e.g. Chinese) and slugify_channel()
-        # would strip them to nothing, collapsing every such channel's stem to "channel_...".
         channel_name = (
             channel_handle_from_url(channel_url)
             or data.get("uploader_id", "").lstrip("@")
             or data.get("channel")
             or data.get("uploader")
             or data.get("id")
-            or "channel"
+            or ""
         )
-        videos = []
-        for e in entries:
+        entries = []
+        for e in data.get("entries", [])[:limit]:
             vid = e.get("id", "")
-            if not VIDEO_ID_RE.match(vid):
-                continue
-            videos.append({"video_id": vid, "title": e.get("title", vid), "channel": channel_name})
-        return videos
+            if VIDEO_ID_RE.match(vid):
+                entries.append({"video_id": vid, "title": e.get("title", vid)})
+        return entries, channel_name
+
+    def _video_upload_timestamp(self, video_id: str) -> int:
+        """Epoch upload timestamp for ordering candidates pulled from multiple tabs
+        (flat-playlist entries don't carry a usable date). 0 if the lookup fails —
+        such a video sorts last rather than crashing the whole channel fetch."""
+        proc = subprocess.run(
+            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, "--skip-download", "--print", "%(timestamp)s",
+             f"https://www.youtube.com/watch?v={video_id}"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        line = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
+        try:
+            return int(float(line))
+        except ValueError:
+            return 0
+
+    def list_channel_videos(self, channel_url: str, limit: int) -> list[dict]:
+        """Return up to `limit` videos, newest first, as [{video_id, title, channel}].
+
+        Combines the channel's /videos and /streams tabs (unless the URL already
+        names one explicitly) — channels that mainly post archived livestreams (e.g.
+        a daily morning-show format) put their regular public content under /streams,
+        not /videos, so querying only /videos silently misses it. --flat-playlist
+        entries don't carry a usable date, so once tabs are merged the combined
+        candidate set is re-sorted by an actual per-video upload timestamp lookup.
+        """
+        url = channel_url.rstrip("/")
+        if url.endswith("/videos"):
+            tabs = ["videos"]
+            url = url[: -len("/videos")]
+        elif url.endswith("/streams"):
+            tabs = ["streams"]
+            url = url[: -len("/streams")]
+        else:
+            tabs = ["videos", "streams"]
+
+        by_id: dict[str, dict] = {}
+        channel_name = ""
+        for tab in tabs:
+            entries, name = self._list_tab(url, tab, limit)
+            channel_name = channel_name or name
+            for e in entries:
+                by_id.setdefault(e["video_id"], e)  # first tab wins on title if seen twice
+
+        candidates = list(by_id.values())
+        if len(tabs) > 1 and candidates:
+            # Each individual tab is already newest-first, but interleaving two such
+            # lists by dict-insertion order isn't — resolve real order via per-video
+            # timestamp lookups before truncating to `limit`.
+            for c in candidates:
+                c["_ts"] = self._video_upload_timestamp(c["video_id"])
+            candidates.sort(key=lambda c: c["_ts"], reverse=True)
+
+        channel_name = channel_name or "channel"
+        return [
+            {"video_id": c["video_id"], "title": c["title"], "channel": channel_name}
+            for c in candidates[:limit]
+        ]
 
     def fetch_official_transcript(
         self, video_id: str, languages: list[str] | None = None
@@ -302,7 +355,7 @@ class ChannelFetcher:
             manifest = {k: v for k, v in json.loads(manifest_path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
         videos = self.list_channel_videos(channel_url, limit)
-        transcribed_auto = transcribed_manual = added = skipped = 0
+        transcribed_auto = transcribed_manual = added = skipped = failed = 0
         with tempfile.TemporaryDirectory(prefix="channel_fetch_") as tmp:
             tmp_dir = Path(tmp)
             for video in videos:
@@ -315,47 +368,54 @@ class ChannelFetcher:
                     skipped += 1
                     continue
 
-                if try_official_transcript:
-                    transcript = self.fetch_official_transcript(video["video_id"], transcript_languages)
-                    if transcript is not None:
-                        raw = transcript.to_raw_data()
-                        data_dir.mkdir(parents=True, exist_ok=True)
-                        if transcript.is_generated:
-                            # YouTube's own ASR — no better than what whisper would produce,
-                            # so just use it as FIN.srt directly; not worth a refine_fin_srt pass.
-                            fin_path.write_text(
-                                transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-auto"),
-                                encoding="utf-8",
-                            )
-                            print(f"[channel_fetch] {stem}: auto-generated YouTube transcript ({transcript.language_code}), wrote {fin_path} — skipping whisper")
-                            transcribed_auto += 1
-                        else:
-                            # Creator-uploaded captions — close enough to ground truth to keep
-                            # as GT.srt. Also write a provisional FIN.srt (same content) so the
-                            # stem is immediately usable; `channel_fetch.py refine` can later
-                            # spend audio+Mac-mini time to have the pipeline regenerate a
-                            # properly formatted FIN.srt scored against this GT.
-                            gt_path = data_dir / f"{stem}_GT.srt"
-                            gt_path.write_text(
-                                transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-manual"),
-                                encoding="utf-8",
-                            )
-                            fin_path.write_text(
-                                transcript_to_pseudo_srt(raw, stem, transcript.language_code, PROVISIONAL_SOURCE_SUFFIX),
-                                encoding="utf-8",
-                            )
-                            print(f"[channel_fetch] {stem}: manual YouTube transcript ({transcript.language_code}), wrote {gt_path} + provisional {fin_path} — run `refine` to have whisper pipeline regenerate FIN.srt from this GT")
-                            transcribed_manual += 1
-                        continue
+                try:
+                    if try_official_transcript:
+                        transcript = self.fetch_official_transcript(video["video_id"], transcript_languages)
+                        if transcript is not None:
+                            raw = transcript.to_raw_data()
+                            data_dir.mkdir(parents=True, exist_ok=True)
+                            if transcript.is_generated:
+                                # YouTube's own ASR — no better than what whisper would produce,
+                                # so just use it as FIN.srt directly; not worth a refine_fin_srt pass.
+                                fin_path.write_text(
+                                    transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-auto"),
+                                    encoding="utf-8",
+                                )
+                                print(f"[channel_fetch] {stem}: auto-generated YouTube transcript ({transcript.language_code}), wrote {fin_path} — skipping whisper")
+                                transcribed_auto += 1
+                            else:
+                                # Creator-uploaded captions — close enough to ground truth to keep
+                                # as GT.srt. Also write a provisional FIN.srt (same content) so the
+                                # stem is immediately usable; `channel_fetch.py refine` can later
+                                # spend audio+Mac-mini time to have the pipeline regenerate a
+                                # properly formatted FIN.srt scored against this GT.
+                                gt_path = data_dir / f"{stem}_GT.srt"
+                                gt_path.write_text(
+                                    transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-manual"),
+                                    encoding="utf-8",
+                                )
+                                fin_path.write_text(
+                                    transcript_to_pseudo_srt(raw, stem, transcript.language_code, PROVISIONAL_SOURCE_SUFFIX),
+                                    encoding="utf-8",
+                                )
+                                print(f"[channel_fetch] {stem}: manual YouTube transcript ({transcript.language_code}), wrote {gt_path} + provisional {fin_path} — run `refine` to have whisper pipeline regenerate FIN.srt from this GT")
+                                transcribed_manual += 1
+                            continue
 
-                print(f"[channel_fetch] downloading audio for {stem}: {video['title']}")
-                audio_path = self.download_audio(video["video_id"], tmp_dir)
-                renamed = audio_path.with_name(f"{stem}{audio_path.suffix}")
-                audio_path.rename(renamed)
-                print(f"[channel_fetch] publishing release asset for {stem}")
-                audio_url = self.publish_audio_asset(stem, renamed)
-                manifest[stem] = audio_url
-                added += 1
+                    print(f"[channel_fetch] downloading audio for {stem}: {video['title']}")
+                    audio_path = self.download_audio(video["video_id"], tmp_dir)
+                    renamed = audio_path.with_name(f"{stem}{audio_path.suffix}")
+                    audio_path.rename(renamed)
+                    print(f"[channel_fetch] publishing release asset for {stem}")
+                    audio_url = self.publish_audio_asset(stem, renamed)
+                    manifest[stem] = audio_url
+                    added += 1
+                except RuntimeError as e:
+                    # One unfetchable video (members-only, deleted, geo-blocked, etc.) shouldn't
+                    # sink the whole batch — log it and keep going so the manifest write below
+                    # still captures whatever earlier videos in this run did succeed.
+                    print(f"[channel_fetch] {stem}: failed, skipping ({e})")
+                    failed += 1
 
         manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
