@@ -5,8 +5,21 @@ channel_fetch.py — Download audio for the newest videos on a YouTube channel,
 publish each as a GitHub Release asset on the source repo, and register it in
 the {stem: audio_url} manifest consumed by skill-mlx-api-client-whisper.
 
+Before touching audio/whisper at all, each video is checked for an official
+YouTube transcript via `youtube-transcript-api`, in a preferred language:
+  - YouTube's own auto-generated captions -> written straight to FIN.srt
+    (no better than whisper's own output, so not worth refining).
+  - Creator-uploaded (manual) captions -> written to GT.srt *and* a
+    provisional FIN.srt of the same content; `channel_fetch.py refine` can
+    later spend audio+Mac-mini time on task_type="refine_fin_srt" to have
+    the pipeline regenerate a properly formatted FIN.srt from that GT.
+Either way the video skips the audio/manifest/whisper path entirely at fetch
+time — whisper's ~1-1.5h/video multi-experiment transcription is reserved for
+videos YouTube has no transcript for at all.
+
 Requires the `yt-dlp` CLI on PATH (audio extraction / metadata listing) and
-`requests` (already a dependency of skill-mlx-api-client-whisper).
+`requests`/`youtube-transcript-api` (already dependencies of
+skill-mlx-api-client-whisper / this skill).
 
 Usage (CLI):
     python scripts/channel_fetch.py fetch https://www.youtube.com/@fubonsec --limit 5
@@ -35,9 +48,17 @@ except ImportError:
     pass
 
 import requests
+from youtube_transcript_api import CouldNotRetrieveTranscript, YouTubeTranscriptApi
 
 API_ROOT = "https://api.github.com"
 UPLOADS_ROOT = "https://uploads.github.com"
+
+# Preference order for fetch_official_transcript(): Traditional-Chinese variants first
+# (this repo's channels are Taiwan financial YouTube), then Simplified, then English.
+# youtube-transcript-api raises NoTranscriptFound (a CouldNotRetrieveTranscript subclass)
+# rather than falling back to an unrelated language, so a video whose only captions are
+# e.g. Japanese correctly falls through to the whisper pipeline instead of mistranscribing.
+DEFAULT_TRANSCRIPT_LANGUAGES = ["zh-TW", "zh-Hant", "zh", "zh-Hans", "zh-CN", "en"]
 
 # Mirrors STEM_PATTERNS["youtube"] in skill-mlx-api-client-whisper/scripts/whisper_issue_client.py —
 # video_id is always the fixed 11-char YouTube ID.
@@ -65,6 +86,50 @@ def channel_handle_from_url(channel_url: str) -> str | None:
     """Extract the ASCII @handle from a channel URL, e.g. '.../@fubonsec/videos' -> 'fubonsec'."""
     m = HANDLE_IN_URL_RE.search(channel_url)
     return m.group(1) if m else None
+
+
+def _pseudo_srt_timestamp(total_seconds: float) -> str:
+    """(MM:SS.mmm) — matches CUE_RE in skill-youtube-channel-srt-keyframe-extract's
+    parse_srt(); MM is total minutes (unbounded), not clock-wrapped hours:minutes."""
+    minutes = int(total_seconds // 60)
+    seconds = total_seconds - minutes * 60
+    return f"{minutes:02d}:{seconds:06.3f}"
+
+
+# Tag written into a provisional FIN.srt's [METADATA] "Source:" line when it was derived
+# directly from a manually-created YouTube transcript rather than the whisper pipeline.
+# request_refinement() scans for this exact suffix to find stems still awaiting a real
+# refine_fin_srt pass — once the Mac-mini pipeline overwrites FIN.srt, its own "Source:"
+# (an "_exp<N>" experiment tag) replaces this and the stem stops showing up in the scan.
+PROVISIONAL_SOURCE_SUFFIX = "_youtube-transcript-manual-provisional"
+
+
+def transcript_to_pseudo_srt(snippets: list[dict], stem: str, language_code: str, source_suffix: str) -> str:
+    """Render youtube-transcript-api snippets ({text, start, duration}) into this repo's
+    FIN.srt/GT.srt format — see data/*/*_FIN.srt for the format this mirrors."""
+    lines = [
+        "[METADATA]",
+        f"Source: {stem}{source_suffix}",
+        f"Language: {language_code}",
+        "---",
+    ]
+    for snip in snippets:
+        text = " ".join(snip["text"].split())
+        if not text:
+            continue
+        lines.append(f"({_pseudo_srt_timestamp(snip['start'])}) {text}")
+    return "\n".join(lines) + "\n"
+
+
+def _srt_source_tag(srt_path: Path) -> str | None:
+    """Read just the [METADATA] "Source:" line of a pseudo-SRT file, or None if absent/unreadable."""
+    try:
+        for line in srt_path.read_text(encoding="utf-8-sig").splitlines()[:4]:
+            if line.startswith("Source:"):
+                return line[len("Source:"):].strip()
+    except OSError:
+        pass
+    return None
 
 
 class ChannelFetcher:
@@ -129,6 +194,23 @@ class ChannelFetcher:
                 continue
             videos.append({"video_id": vid, "title": e.get("title", vid), "channel": channel_name})
         return videos
+
+    def fetch_official_transcript(
+        self, video_id: str, languages: list[str] | None = None
+    ):
+        """Return a FetchedTranscript for the first matching language in `languages`,
+        or None if YouTube has no transcript in any of them (captions disabled, or only
+        available in an unrelated language). Network/API errors are also treated as "no
+        transcript" — the caller falls back to the audio+whisper path rather than
+        failing the whole channel fetch over a single flaky lookup."""
+        languages = languages or DEFAULT_TRANSCRIPT_LANGUAGES
+        try:
+            return YouTubeTranscriptApi().fetch(video_id, languages=languages)
+        except CouldNotRetrieveTranscript:
+            return None
+        except Exception as e:
+            print(f"[channel_fetch]   transcript lookup failed for {video_id} ({type(e).__name__}: {e}), falling back to whisper")
+            return None
 
     def download_audio(self, video_id: str, dest_dir: Path) -> Path:
         """Download best-audio for a video into dest_dir, returns the resulting file path."""
@@ -208,6 +290,8 @@ class ChannelFetcher:
         channel_url: str,
         limit: int = 5,
         manifest_path: str | Path = "audio_manifest.json",
+        try_official_transcript: bool = True,
+        transcript_languages: list[str] | None = None,
     ) -> dict[str, int]:
         manifest_path = Path(manifest_path)
         manifest: dict[str, str] = {}
@@ -215,17 +299,52 @@ class ChannelFetcher:
             manifest = {k: v for k, v in json.loads(manifest_path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
         videos = self.list_channel_videos(channel_url, limit)
-        added = skipped = 0
+        transcribed_auto = transcribed_manual = added = skipped = 0
         with tempfile.TemporaryDirectory(prefix="channel_fetch_") as tmp:
             tmp_dir = Path(tmp)
             for video in videos:
                 channel_slug = slugify_channel(video["channel"])
                 stem = f"{channel_slug}_{video['video_id']}"
-                fin_path = self.repo_root / "data" / channel_slug / f"{stem}_FIN.srt"
+                data_dir = self.repo_root / "data" / channel_slug
+                fin_path = data_dir / f"{stem}_FIN.srt"
                 if stem in manifest or fin_path.exists():
                     print(f"[channel_fetch] skip {stem} (already sourced)")
                     skipped += 1
                     continue
+
+                if try_official_transcript:
+                    transcript = self.fetch_official_transcript(video["video_id"], transcript_languages)
+                    if transcript is not None:
+                        raw = transcript.to_raw_data()
+                        data_dir.mkdir(parents=True, exist_ok=True)
+                        if transcript.is_generated:
+                            # YouTube's own ASR — no better than what whisper would produce,
+                            # so just use it as FIN.srt directly; not worth a refine_fin_srt pass.
+                            fin_path.write_text(
+                                transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-auto"),
+                                encoding="utf-8",
+                            )
+                            print(f"[channel_fetch] {stem}: auto-generated YouTube transcript ({transcript.language_code}), wrote {fin_path} — skipping whisper")
+                            transcribed_auto += 1
+                        else:
+                            # Creator-uploaded captions — close enough to ground truth to keep
+                            # as GT.srt. Also write a provisional FIN.srt (same content) so the
+                            # stem is immediately usable; `channel_fetch.py refine` can later
+                            # spend audio+Mac-mini time to have the pipeline regenerate a
+                            # properly formatted FIN.srt scored against this GT.
+                            gt_path = data_dir / f"{stem}_GT.srt"
+                            gt_path.write_text(
+                                transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-manual"),
+                                encoding="utf-8",
+                            )
+                            fin_path.write_text(
+                                transcript_to_pseudo_srt(raw, stem, transcript.language_code, PROVISIONAL_SOURCE_SUFFIX),
+                                encoding="utf-8",
+                            )
+                            print(f"[channel_fetch] {stem}: manual YouTube transcript ({transcript.language_code}), wrote {gt_path} + provisional {fin_path} — run `refine` to have whisper pipeline regenerate FIN.srt from this GT")
+                            transcribed_manual += 1
+                        continue
+
                 print(f"[channel_fetch] downloading audio for {stem}: {video['title']}")
                 audio_path = self.download_audio(video["video_id"], tmp_dir)
                 renamed = audio_path.with_name(f"{stem}{audio_path.suffix}")
@@ -239,8 +358,85 @@ class ChannelFetcher:
             json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
             encoding="utf-8",
         )
-        print(f"[channel_fetch] done. added={added} skipped={skipped} -> {manifest_path}")
-        return {"added": added, "skipped": skipped}
+        print(
+            f"[channel_fetch] done. transcribed_auto={transcribed_auto} transcribed_manual={transcribed_manual} "
+            f"added={added} skipped={skipped} -> {manifest_path}"
+        )
+        return {
+            "transcribed_auto": transcribed_auto,
+            "transcribed_manual": transcribed_manual,
+            "added": added,
+            "skipped": skipped,
+        }
+
+    # -- refinement of manual-transcript stems -------------------------------
+
+    def list_provisional_stems(self) -> list[tuple[str, Path]]:
+        """Find every {stem}_FIN.srt under data/ still tagged PROVISIONAL_SOURCE_SUFFIX —
+        i.e. derived straight from a manual YouTube transcript and never run through the
+        whisper pipeline's refine_fin_srt yet. Returns [(stem, fin_path), ...]."""
+        data_root = self.repo_root / "data"
+        if not data_root.is_dir():
+            return []
+        found = []
+        for fin_path in sorted(data_root.glob("*/*_FIN.srt")):
+            stem = fin_path.name[: -len("_FIN.srt")]
+            tag = _srt_source_tag(fin_path)
+            if tag and tag.endswith(PROVISIONAL_SOURCE_SUFFIX):
+                found.append((stem, fin_path))
+        return found
+
+    def request_refinement(
+        self,
+        manifest_path: str | Path = "audio_manifest.json",
+        stems: list[str] | None = None,
+    ) -> dict[str, int]:
+        """For stems whose FIN.srt is still a provisional (transcript-derived) placeholder,
+        download+publish audio and open a refine_fin_srt request so the Mac-mini pipeline
+        regenerates FIN.srt from the existing GT.srt — without paying for a full
+        multi-experiment transcription pass."""
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skill-mlx-api-client-whisper" / "scripts"))
+        from whisper_issue_client import WhisperIssueClient  # type: ignore
+
+        manifest_path = Path(manifest_path)
+        manifest: dict[str, str] = {}
+        if manifest_path.exists():
+            manifest = {k: v for k, v in json.loads(manifest_path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
+
+        candidates = self.list_provisional_stems()
+        if stems is not None:
+            wanted = set(stems)
+            candidates = [(s, p) for s, p in candidates if s in wanted]
+
+        whisper_client = WhisperIssueClient()
+        requested = skipped = 0
+        with tempfile.TemporaryDirectory(prefix="channel_fetch_refine_") as tmp:
+            tmp_dir = Path(tmp)
+            for stem, fin_path in candidates:
+                video_id = stem.rsplit("_", 1)[-1]
+                audio_url = manifest.get(stem)
+                if not audio_url:
+                    print(f"[channel_fetch] downloading audio for refine: {stem}")
+                    audio_path = self.download_audio(video_id, tmp_dir)
+                    renamed = audio_path.with_name(f"{stem}{audio_path.suffix}")
+                    audio_path.rename(renamed)
+                    audio_url = self.publish_audio_asset(stem, renamed)
+                    manifest[stem] = audio_url
+
+                issue = whisper_client.open_fin_request(stem, audio_url, task_type="refine_fin_srt")
+                if issue is None:
+                    print(f"[channel_fetch] refine already requested for {stem} (issue open)")
+                    skipped += 1
+                else:
+                    print(f"[channel_fetch] opened refine_fin_srt request for {stem}: {issue.get('html_url', '')}")
+                    requested += 1
+
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(f"[channel_fetch] refine done. requested={requested} skipped={skipped}")
+        return {"requested": requested, "skipped": skipped}
 
 
 if __name__ == "__main__":
@@ -252,14 +448,39 @@ if __name__ == "__main__":
     fetch_p.add_argument("--limit", type=int, default=5, help="Number of newest videos to consider (default 5)")
     fetch_p.add_argument("--manifest", default="audio_manifest.json", help="Path to the manifest JSON")
     fetch_p.add_argument("--sync", action="store_true", help="Run whisper_issue_client.sync_manifest afterwards")
+    fetch_p.add_argument(
+        "--no-transcript", action="store_true",
+        help="Skip the official-YouTube-transcript check; always go through audio+whisper",
+    )
+    fetch_p.add_argument(
+        "--transcript-languages", default=None,
+        help=f"Comma-separated language preference order (default: {','.join(DEFAULT_TRANSCRIPT_LANGUAGES)})",
+    )
+
+    refine_p = sub.add_parser(
+        "refine",
+        help="For stems with a manual-transcript-derived provisional FIN.srt, download audio "
+             "and request the whisper pipeline regenerate FIN.srt from the existing GT.srt",
+    )
+    refine_p.add_argument("--manifest", default="audio_manifest.json", help="Path to the manifest JSON")
+    refine_p.add_argument("--stem", action="append", dest="stems", default=None,
+                           help="Limit to specific stem(s) (repeatable); default: all provisional stems")
 
     args = parser.parse_args()
     fetcher = ChannelFetcher()
 
     if args.cmd == "fetch":
-        fetcher.fetch_channel(args.channel_url, limit=args.limit, manifest_path=args.manifest)
+        fetcher.fetch_channel(
+            args.channel_url,
+            limit=args.limit,
+            manifest_path=args.manifest,
+            try_official_transcript=not args.no_transcript,
+            transcript_languages=args.transcript_languages.split(",") if args.transcript_languages else None,
+        )
         if args.sync:
             sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skill-mlx-api-client-whisper" / "scripts"))
             from whisper_issue_client import WhisperIssueClient  # type: ignore
 
             WhisperIssueClient().sync_manifest(args.manifest)
+    elif args.cmd == "refine":
+        fetcher.request_refinement(manifest_path=args.manifest, stems=args.stems)

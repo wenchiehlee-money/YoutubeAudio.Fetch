@@ -2,4 +2,5 @@ requests
 python-dotenv
 yt-dlp
 Pillow
+youtube-transcript-api
 -e ../llm

@@ -1,16 +1,16 @@
 ---
 name: skill-youtube-channel-fetch
-description: 從 YouTube 財經頻道下載最新影片的音訊，發佈為本 repo 的 GitHub Release 附件，並寫入 audio_manifest.json，供 skill-mlx-api-client-whisper 觸發轉錄。
+description: 從 YouTube 財經頻道下載最新影片，優先嘗試官方逐字稿（手動字幕拆成 GT.srt+暫定 FIN.srt、自動字幕直接當 FIN.srt）；沒有的才下載音訊、發佈為本 repo 的 GitHub Release 附件，並寫入 audio_manifest.json 供 skill-mlx-api-client-whisper 觸發轉錄。另提供 refine 子指令，針對手動字幕的暫定 FIN.srt 補觸發 whisper pipeline 的 refine_fin_srt。
 ---
 
 # YouTube 頻道音訊擷取技能 (skill-youtube-channel-fetch)
 
 | 項目 | 內容 |
 | :--- | :--- |
-| 版本 | 1.0.0（詳見 `metadata.json`） |
+| 版本 | 1.2.0（詳見 `metadata.json`） |
 | 登錄庫 | https://github.com/wenchiehlee/skills （`common/skill-youtube-channel-fetch`） |
 | 維護者 | wenchiehlee |
-| 對應下游 | `skill-mlx-api-client-whisper`（消費本技能寫入的 `audio_manifest.json`） |
+| 對應下游 | `skill-mlx-api-client-whisper`（消費本技能寫入的 `audio_manifest.json`，及本技能 `refine` 直接呼叫的 `open_fin_request`） |
 
 ## 這技能做什麼
 
@@ -18,7 +18,21 @@ description: 從 YouTube 財經頻道下載最新影片的音訊，發佈為本 
 它不負責從 YouTube 頻道抓新影片。本技能補上這一段：
 
 1. 用 `yt-dlp` 列出頻道最新 N 支影片（`/videos` tab，預設由新到舊排序）
-2. 對每支尚未出現在 manifest、也還沒有本地 `FIN.srt` 的影片，下載音訊（m4a）
+2. 對每支尚未出現在 manifest、也還沒有本地 `FIN.srt` 的影片，**先用
+   `youtube-transcript-api` 查詢 YouTube 官方逐字稿**，依 `DEFAULT_TRANSCRIPT_LANGUAGES`
+   語言優先序嘗試：`zh-TW, zh-Hant, zh, zh-Hans, zh-CN, en`。依字幕來源分兩種處理：
+   - **YouTube 自動語音辨識**（`is_generated=True`，品質跟 whisper 自己的輸出差不多）
+     → 直接轉成本 repo 的 `FIN.srt` 格式寫入 `data/{channel}/{stem}_FIN.srt`，這支影片
+     完全不進音訊/manifest/whisper 流程。不值得再花一次 `refine_fin_srt` 成本。
+   - **創作者手動上傳字幕**（`is_generated=False`，品質接近真人校正，可視為 ground truth）
+     → 寫成 `data/{channel}/{stem}_GT.srt`，**同時**也用同一份內容寫一份「暫定版」
+     `data/{channel}/{stem}_FIN.srt`（[METADATA] 的 `Source:` 帶
+     `_youtube-transcript-manual-provisional` 標記），讓這支影片立刻可用（例如接
+     `skill-youtube-channel-srt-keyframe-extract`），但**不下載音訊、不觸發 whisper**。
+     之後可用 `refine` 子指令，針對性地補下載音訊並觸發 Mac-mini pipeline 的
+     `refine_fin_srt`，用這份 GT 重新產生格式跟其他 FIN.srt 一致、品質更好的版本
+     （跳過最貴的多組實驗轉錄步驟，但仍需 audio_url）。
+   - **兩者皆無**（字幕被關閉，或只有不相關語言）→ 才繼續走原本流程：下載音訊（m4a）
 3. 把音訊發佈成本 repo（`WHISPER_SOURCE_REPO`）的 GitHub Release 附件
    （tag = `audio-{stem}`），因為 Mac-mini pipeline 是用
    `gh release download` 拉音訊，`audio_url` 只是備援
@@ -26,13 +40,17 @@ description: 從 YouTube 財經頻道下載最新影片的音訊，發佈為本 
 
 寫完 manifest 後，接著呼叫既有的
 `skill-mlx-api-client-whisper/scripts/whisper_issue_client.py sync` 即可依 manifest
-開 issue 觸發轉錄（或本技能加 `--sync` 直接串接）。
+開 issue 觸發轉錄（或本技能加 `--sync` 直接串接）——這一步只會處理「完全沒有官方逐字稿」
+的影片；手動字幕的 refine 走法二獨立的 `refine` 子指令。
+
+> 若某些頻道就是希望永遠走完整 whisper 流程，用 `fetch ... --no-transcript` 跳過整個
+> 官方逐字稿檢查。
 
 ## ⚙️ 前置環境配置
 
 ### 1. 安裝依賴
 ```bash
-pip install requests python-dotenv
+pip install requests python-dotenv youtube-transcript-api
 ```
 另需系統已安裝 [`yt-dlp`](https://github.com/yt-dlp/yt-dlp) CLI（`pip install yt-dlp` 或對應套件管理器），
 以及 [Node.js](https://nodejs.org/)（`node` 需在 PATH 上）——`yt-dlp` 現在需要 JS runtime
@@ -65,7 +83,24 @@ python scripts/channel_fetch.py fetch https://www.youtube.com/@fubonsec --limit 
 `WhisperIssueClient().sync_manifest(...)`——因此兩個技能需部署在同一個 `skills/` 目錄下
 （如同本 repo 現況）。
 
-### 方式 C：作為模組整合進自己的排程腳本
+### 方式 C：跳過官方逐字稿檢查，永遠走音訊+whisper
+```bash
+python scripts/channel_fetch.py fetch https://www.youtube.com/@fubonsec --limit 5 --no-transcript
+```
+
+### 方式 D：手動字幕暫定 FIN.srt 補 refine（下載音訊＋觸發 refine_fin_srt）
+```bash
+python scripts/channel_fetch.py refine
+# 或只針對特定 stem：
+python scripts/channel_fetch.py refine --stem yutinghaofinance_v7TpiWK5DTQ
+```
+會掃描 `data/*/*_FIN.srt`，找出 `Source:` 帶 `_youtube-transcript-manual-provisional`
+標記（尚未經 whisper pipeline 處理）的 stem，逐一下載音訊、發佈 Release、更新 manifest，
+並呼叫 `WhisperIssueClient().open_fin_request(stem, audio_url, task_type="refine_fin_srt")`。
+Mac-mini pipeline 完成後會用同一路徑覆寫 `FIN.srt`（`Source:` 換成真正的 `_exp<N>` 標記），
+之後這個 stem 就不會再被 `refine` 掃到。
+
+### 方式 E：作為模組整合進自己的排程腳本
 ```python
 from scripts.channel_fetch import ChannelFetcher
 
