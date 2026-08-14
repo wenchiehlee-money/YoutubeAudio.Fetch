@@ -27,7 +27,12 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        # Not `pip install -r requirements.txt` — that also pulls in `-e ../llm`, an
+        # editable install of a local sibling repo that only exists on dev machines.
+        # This workflow never touches the llm package (the transcript-first path is
+        # pure yt-dlp/youtube-transcript-api/GitHub API, no LLM calls), so just install
+        # the subset channel_fetch.py + whisper_issue_client.py actually need.
+        run: pip install requests python-dotenv yt-dlp youtube-transcript-api
 
       - name: Fetch each tracked channel
         env:
