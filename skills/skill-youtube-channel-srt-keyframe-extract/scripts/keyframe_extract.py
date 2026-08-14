@@ -42,8 +42,11 @@ from llm import LLMClient
 # signature-deciphering JS YouTube now requires, silently limiting extraction to the
 # legacy 640x360 muxed format (so captured frames come out far below 1080p) and, for
 # some videos, failing downloads outright with a plain 403. Node is a much more
-# commonly pre-installed runtime than deno, so use it explicitly.
-YT_DLP_JS_RUNTIME_ARGS = ["--js-runtimes", "node"]
+# commonly pre-installed runtime than deno, so use it explicitly. --remote-components
+# ejs:github fetches yt-dlp's own n/sig challenge-solver script from GitHub instead of
+# relying on the one bundled in the current release, which cuts down (but doesn't fully
+# eliminate — YouTube's anti-bot behavior is itself flaky) the plain 403s seen without it.
+YT_DLP_JS_RUNTIME_ARGS = ["--js-runtimes", "node", "--remote-components", "ejs:github"]
 
 # Despite the ".srt" filename, skill-mlx-api-server-whisper's FIN.srt/GT.srt is NOT
 # standard SubRip: an optional "[METADATA]\n...\n---\n" header, then one cue per line

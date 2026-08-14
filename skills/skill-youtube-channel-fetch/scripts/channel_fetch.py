@@ -69,7 +69,10 @@ VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 # legacy 640x360 muxed format and, for some videos (seen on livestream VODs), failing
 # downloads outright with a plain 403. Node is a much more commonly pre-installed
 # runtime than deno, so use it explicitly rather than requiring deno everywhere.
-YT_DLP_JS_RUNTIME_ARGS = ["--js-runtimes", "node"]
+# --remote-components ejs:github fetches yt-dlp's n/sig challenge-solver script from
+# GitHub rather than the one bundled in the installed release, which cuts down (but
+# doesn't fully eliminate — YouTube's anti-bot behavior is itself flaky) plain 403s.
+YT_DLP_JS_RUNTIME_ARGS = ["--js-runtimes", "node", "--remote-components", "ejs:github"]
 
 
 HANDLE_IN_URL_RE = re.compile(r"youtube\.com/@([A-Za-z0-9._-]+)", re.IGNORECASE)
