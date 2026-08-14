@@ -48,10 +48,12 @@ def save_cache(cache: dict[str, dict[str, str]]) -> None:
 
 
 def fetch_video_meta(video_id: str) -> dict[str, str] | None:
-    """{'title': ..., 'date': 'YYYY-MM-DD'} via yt-dlp, or None if the lookup fails
-    (deleted/private video, transient network/anti-bot flakiness, etc.)."""
+    """{'title': ..., 'date': 'YYYY-MM-DD', 'channel_name': ...} via yt-dlp, or None if
+    the lookup fails (deleted/private video, transient network/anti-bot flakiness, etc.).
+    channel_name is the channel's real display name (e.g. "游庭皓的財經皓角"), not our
+    URL-handle-derived slug (e.g. "yutinghaofinance") — used for a more readable header."""
     proc = subprocess.run(
-        ["yt-dlp", *YT_DLP_ARGS, "--skip-download", "--print", "%(title)s|||%(upload_date)s",
+        ["yt-dlp", *YT_DLP_ARGS, "--skip-download", "--print", "%(title)s|||%(upload_date)s|||%(channel)s",
          f"https://www.youtube.com/watch?v={video_id}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
@@ -59,11 +61,11 @@ def fetch_video_meta(video_id: str) -> dict[str, str] | None:
         print(f"[generate_readme_index]   metadata lookup failed for {video_id}: {proc.stderr[:200]}")
         return None
     line = proc.stdout.strip().splitlines()[-1] if proc.stdout.strip() else ""
-    if "|||" not in line:
+    if line.count("|||") != 2:
         return None
-    title, upload_date = line.rsplit("|||", 1)
+    title, upload_date, channel_name = line.split("|||")
     date = f"{upload_date[:4]}-{upload_date[4:6]}-{upload_date[6:8]}" if len(upload_date) == 8 else upload_date
-    return {"title": title.strip(), "date": date}
+    return {"title": title.strip(), "date": date, "channel_name": channel_name.strip()}
 
 
 def build_index() -> dict[str, list[dict]]:
@@ -80,21 +82,25 @@ def build_index() -> dict[str, list[dict]]:
         video_id = m.group(0)
 
         meta = cache.get(video_id)
-        if meta is None:
+        if meta is None or "channel_name" not in meta:
+            # Also refetch entries cached before channel_name was tracked, so existing
+            # stems get backfilled with a readable channel name on the next CI run.
             print(f"[generate_readme_index] fetching metadata for {video_id} ({stem})")
-            meta = fetch_video_meta(video_id)
-            if meta is not None:
+            fetched = fetch_video_meta(video_id)
+            if fetched is not None:
+                meta = fetched
                 cache[video_id] = meta
         if meta is None:
             # Lookup failed and nothing cached — still list it, just without title/date,
             # rather than silently dropping a video that does have a keyframes.md.
-            meta = {"title": stem, "date": ""}
+            meta = {"title": stem, "date": "", "channel_name": channel}
 
         by_channel.setdefault(channel, []).append({
             "stem": stem,
             "video_id": video_id,
             "title": meta["title"],
             "date": meta["date"],
+            "channel_name": meta.get("channel_name", channel),
             "md_path": md_path.relative_to(REPO_ROOT).as_posix(),
         })
 
@@ -111,7 +117,9 @@ def render_index(by_channel: dict[str, list[dict]]) -> str:
 
     lines = [HEADER, ""]
     for channel in sorted(by_channel):
-        lines.append(f"### [{channel}](data/{channel}/)")
+        videos = by_channel[channel]
+        display_name = videos[0]["channel_name"] or channel
+        lines.append(f"### [{display_name}](data/{channel}/)")
         lines.append("")
         lines.append("| 影片 | 日期 |")
         lines.append("| --- | --- |")

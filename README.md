@@ -8,13 +8,13 @@ whisper 轉錄 pipeline（`skill-mlx-api-server-whisper`），產出人工可校
 
 ## 內容索引
 
-### [fubonsec](data/fubonsec/)
+### [富邦證券](data/fubonsec/)
 
 | 影片 | 日期 |
 | --- | --- |
 | [破解股市利空虛實：台股已從反彈走向反轉？｜富邦投顧 陳奕光 董事長《富邦說趨勢》 EP 91](data/fubonsec/fubonsec_-KLEA_c88xI_keyframes.md) | 2026-08-07 |
 
-### [yutinghaofinance](data/yutinghaofinance/)
+### [游庭皓的財經皓角](data/yutinghaofinance/)
 
 | 影片 | 日期 |
 | --- | --- |
