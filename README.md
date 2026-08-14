@@ -33,13 +33,30 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
    （步驟 2 加 `--sync` 可以合併這一步。）
 4. 若某支影片的 `GT.srt` 被人工修正過，想讓 pipeline 重新評分（不重新轉錄），呼叫
    `open_fin_request(stem, audio_url, task_type="refine_fin_srt")`（見 skill SKILL.md）。
-5. 有 `FIN.srt` 後，用 `skill-srt-keyframe-extract` 分析逐字稿找出圖表／簡報等視覺重點時刻，
-   擷取對應畫面存成帶時間碼的 PNG：
+5. 有 `FIN.srt` 後，用 `skill-youtube-channel-srt-keyframe-extract` 分析逐字稿找出圖表／簡報等
+   視覺重點時刻，擷取對應畫面存成帶時間碼的 PNG：
    ```bash
-   python skills/skill-srt-keyframe-extract/scripts/keyframe_extract.py extract <stem> \
+   python skills/skill-youtube-channel-srt-keyframe-extract/scripts/keyframe_extract.py extract <stem> \
        --srt data/<channel>/<stem>_FIN.srt \
        --video-url https://www.youtube.com/watch?v=<video_id>
    ```
 
-詳細設計（issue metadata schema、stem 解析規則、company-configs 調校/GT 校正迴圈）見
+## 內容索引
+
+### [fubonsec](data/fubonsec/)
+
+| 影片 | 日期 |
+| --- | --- |
+| [破解股市利空虛實：台股已從反彈走向反轉？｜富邦投顧 陳奕光 董事長《富邦說趨勢》 EP 91](data/fubonsec/fubonsec_-KLEA_c88xI_keyframes.md) | 2026-08-07 |
+
+### [yutinghaofinance](data/yutinghaofinance/)
+
+| 影片 | 日期 |
+| --- | --- |
+| [2026/8/12(三)GPU金融化狂潮 2008正在重演？兆元商機還是下一場危機？【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_ApykW90PQ58_keyframes.md) | 2026-08-12 |
+| [2026/8/11(二)AI舉債時代 自由現金流能翻正?外資再加空單!台股還能攻?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_v7TpiWK5DTQ_keyframes.md) | 2026-08-11 |
+
+## 詳細設計
+
+issue metadata schema、stem 解析規則、company-configs 調校/GT 校正迴圈見
 `Mac-mini` repo 的 `skills/skill-mlx-api-server-whisper/SKILL.md`。
