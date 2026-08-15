@@ -26,12 +26,7 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install dependencies
-        # Not `pip install -r requirements.txt` — that also pulls in `-e ../llm`, an
-        # editable install of a local sibling repo that only exists on dev machines.
-        # This workflow never touches the llm package (the transcript-first path is
-        # pure yt-dlp/youtube-transcript-api/GitHub API, no LLM calls), so just install
-        # the subset channel_fetch.py + whisper_issue_client.py actually need.
+      - name: Install fetch dependencies
         run: pip install requests python-dotenv yt-dlp youtube-transcript-api
 
       - name: Fetch each tracked channel
@@ -48,6 +43,53 @@ jobs:
             python skills/skill-youtube-channel-fetch/scripts/channel_fetch.py fetch "$url" --limit "$LIMIT" --sync || echo "::warning::fetch failed for $url"
             echo "::endgroup::"
           done
+
+      - name: Install keyframe-extraction dependencies
+        # Only skill-youtube-channel-srt-keyframe-extract needs these — not
+        # `pip install -r requirements.txt`, whose `-e ../llm` only resolves on a dev
+        # machine with the sibling llm repo checked out locally. In CI, install the
+        # same package straight from GitHub instead.
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          pip install Pillow "llm @ git+https://github.com/wenchiehlee/llm.git"
+
+      - name: Extract keyframes for videos missing a _keyframes.md
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CODEX_API_URL: ${{ secrets.CODEX_API_URL }}
+          CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+        run: |
+          python - <<'PYEOF'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          for fin in sorted(Path("data").glob("*/*_FIN.srt")):
+              stem = fin.name[: -len("_FIN.srt")]
+              md_path = fin.with_name(f"{stem}_keyframes.md")
+              if md_path.exists():
+                  continue
+              video_id = stem.rsplit("_", 1)[-1]
+              video_url = f"https://www.youtube.com/watch?v={video_id}"
+              print(f"::group::{stem}")
+              ok = False
+              for attempt in range(2):
+                  proc = subprocess.run([
+                      sys.executable,
+                      "skills/skill-youtube-channel-srt-keyframe-extract/scripts/keyframe_extract.py",
+                      "extract", stem, "--srt", str(fin), "--video-url", video_url,
+                  ])
+                  if proc.returncode == 0:
+                      ok = True
+                      break
+                  print(f"attempt {attempt + 1} failed for {stem}")
+              if not ok:
+                  # YouTube's anti-bot throttling is intermittent (seen repeatedly in
+                  # manual testing) — leave it for tomorrow's run rather than fail the job.
+                  print(f"::warning::keyframe extraction failed for {stem} after retries, will retry on next run")
+              print("::endgroup::")
+          PYEOF
 
       - name: Regenerate README content index
         run: python scripts/generate_readme_index.py

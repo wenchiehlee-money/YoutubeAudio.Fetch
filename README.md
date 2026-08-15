@@ -66,9 +66,17 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
 
 ## 自動化（每日排程）
 
-`.github/workflows/daily-channel-fetch.yml` 每天自動對 `channels.json` 裡列的每個頻道跑
-`channel_fetch.py fetch <url> --limit 5 --sync`，抓新影片、寫逐字稿/manifest、觸發 whisper
-（也可用 `workflow_dispatch` 手動觸發並自訂 `limit`）。要追蹤新頻道，直接編輯 `channels.json`
+`.github/workflows/daily-channel-fetch.yml` 每天自動：
+
+1. 對 `channels.json` 裡列的每個頻道跑 `channel_fetch.py fetch <url> --limit 5 --sync`，
+   抓新影片、寫逐字稿/manifest、觸發 whisper
+2. 對每個「有 `FIN.srt` 但還沒有 `_keyframes.md`」的 stem 跑
+   `skill-youtube-channel-srt-keyframe-extract`，補齊關鍵畫面擷取（每支重試一次；YouTube
+   端偶發限流導致某支失敗不會擋住其他支，會留到隔天的排程自動重試，因為判斷條件就是
+   「還沒有 `_keyframes.md`」）
+3. 重新產生 README「內容索引」並 commit——新影片跑完關鍵畫面擷取後就會自動出現在這裡
+
+也可用 `workflow_dispatch` 手動觸發並自訂 `limit`。要追蹤新頻道，直接編輯 `channels.json`
 加一行 URL 即可，不用改 workflow。
 
 此 workflow 需要在 repo 的 GitHub Actions Secrets 設定：
@@ -76,10 +84,14 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
   push commit）
 - `REPO_FILE_SYNC_ZHONGZHENG782_MONEY`：對 `WHISPER_TARGET_REPO`（Mac-mini repo）
   `Issues: Read and write`（`--sync` 觸發轉錄用）
+- `GEMINI_API_KEY`、`CODEX_API_URL`、`CODEX_API_KEY`：關鍵畫面擷取要判斷「哪些時間點值得
+  截圖」時呼叫的 `llm` 套件 provider 憑證（`../llm` 的 codex → gemini → mlx 備援鏈；CI
+  環境連不到僅限內網/Tailscale 的 `MLX_API_URL`，所以沒設 mlx 相關 secrets，鏈路會直接
+  落到 codex/gemini 其中之一）
 
-關鍵畫面擷取（`skill-youtube-channel-srt-keyframe-extract`，需下載完整影片＋呼叫 LLM）目前
-**不**包含在每日排程裡——受 YouTube 端間歇性限流影響，成功率不夠穩定到適合放進自動化排程，
-仍建議手動或另外排程執行。
+手動字幕產生的「暫定版 FIN.srt」（`refine` 之前的版本）也會照常被拿去做關鍵畫面擷取——
+截圖跟逐字稿片段仍然有效，之後若跑了 `refine` 讓 Mac-mini pipeline 重新產出正式版
+`FIN.srt`，可以再手動重跑一次關鍵畫面擷取讓內容更新。
 
 ## 詳細設計
 
