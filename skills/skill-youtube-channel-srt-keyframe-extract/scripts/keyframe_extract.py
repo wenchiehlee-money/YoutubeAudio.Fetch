@@ -97,9 +97,11 @@ def _hhmmss_to_seconds(ts: str) -> float:
 # dump the rest of the transcript into one row.
 LAST_MOMENT_EXCERPT_WINDOW = 90
 
-# Display width (px) for each keyframes.md thumbnail — 2x a typical implicit render size,
-# set explicitly since bare markdown images get squeezed by the table cell's other columns.
-THUMBNAIL_WIDTH = 320
+# Display width (px) for each keyframes.md thumbnail. Source PNGs are 1920x1080; this is
+# roughly 1/3 of that. (Note: a first attempt at 320 rendered *smaller* than the original
+# bare `![alt](path)` markdown image did — GitHub doesn't squeeze those down inside a wide
+# table cell the way assumed — so don't drop this below ~480 without checking on GitHub.)
+THUMBNAIL_WIDTH = 640
 
 
 def parse_srt(path: Path) -> list[SrtCue]:
