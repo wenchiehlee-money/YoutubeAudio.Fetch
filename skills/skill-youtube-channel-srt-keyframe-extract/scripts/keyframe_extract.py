@@ -97,6 +97,10 @@ def _hhmmss_to_seconds(ts: str) -> float:
 # dump the rest of the transcript into one row.
 LAST_MOMENT_EXCERPT_WINDOW = 90
 
+# Display width (px) for each keyframes.md thumbnail — 2x a typical implicit render size,
+# set explicitly since bare markdown images get squeezed by the table cell's other columns.
+THUMBNAIL_WIDTH = 320
+
 
 def parse_srt(path: Path) -> list[SrtCue]:
     content = path.read_text(encoding="utf-8-sig")
@@ -273,7 +277,11 @@ class KeyframeExtractor:
             excerpt = " ".join(c.text for c in cues if start <= c.start_seconds < end)
             excerpt = excerpt.replace("|", "\\|") or "（無對應逐字稿內容）"
             reason = moment.get("reason", "").replace("|", "\\|")
-            lines.append(f"| {moment['timestamp']} | ![{path.name}]({rel_path}) | {excerpt} | {reason} |")
+            # Plain `![alt](path)` markdown images get squeezed down by GitHub's
+            # table-cell max-width:100% — an explicit HTML <img width=...> keeps the
+            # thumbnail readably large regardless of the other columns' content width.
+            thumb = f'<img src="{rel_path}" alt="{path.name}" width="{THUMBNAIL_WIDTH}">'
+            lines.append(f"| {moment['timestamp']} | {thumb} | {excerpt} | {reason} |")
         index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return index_path
 
