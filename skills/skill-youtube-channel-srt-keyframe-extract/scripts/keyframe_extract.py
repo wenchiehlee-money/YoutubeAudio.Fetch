@@ -256,7 +256,14 @@ class KeyframeExtractor:
         an actual transcript excerpt (verbatim text from srt_path spoken between this
         moment and the next — precise and keyword-searchable, unlike the LLM's one-line
         guess about what's likely on screen), and that LLM guess as extra context.
-        Lets the PNGs be browsed/cross-referenced without re-running the LLM pass."""
+        Lets the PNGs be browsed/cross-referenced without re-running the LLM pass.
+
+        One block per moment (heading + full-width image + excerpt/reason as plain
+        text below it) rather than a table row — a table forces the image into a
+        narrow cell once any other column (the transcript excerpt in particular) has
+        long content, since GitHub applies max-width:100% to <img> *relative to its
+        cell*, not to the explicit width= attribute. Plain text blocks stay just as
+        keyword-searchable (Ctrl+F / grep) as a table would be."""
         index_path = out_dir.parent / f"{stem}_keyframes.md"
         lines = [
             f"# {stem} — 關鍵畫面索引",
@@ -265,8 +272,6 @@ class KeyframeExtractor:
             f"- 影片：{video_url}",
             f"- 截圖數：{len(saved)}",
             "",
-            "| 時間碼 | 畫面 | 逐字稿片段 | 話題推測 |",
-            "| --- | --- | --- | --- |",
         ]
         for i, (moment, path) in enumerate(zip(moments, saved)):
             rel_path = f"{out_dir.name}/{path.name}"
@@ -277,14 +282,21 @@ class KeyframeExtractor:
                 else start + LAST_MOMENT_EXCERPT_WINDOW
             )
             excerpt = " ".join(c.text for c in cues if start <= c.start_seconds < end)
-            excerpt = excerpt.replace("|", "\\|") or "（無對應逐字稿內容）"
-            reason = moment.get("reason", "").replace("|", "\\|")
-            # Plain `![alt](path)` markdown images get squeezed down by GitHub's
-            # table-cell max-width:100% — an explicit HTML <img width=...> keeps the
-            # thumbnail readably large regardless of the other columns' content width.
-            thumb = f'<img src="{rel_path}" alt="{path.name}" width="{THUMBNAIL_WIDTH}">'
-            lines.append(f"| {moment['timestamp']} | {thumb} | {excerpt} | {reason} |")
-        index_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            excerpt = excerpt or "（無對應逐字稿內容）"
+            reason = moment.get("reason", "")
+            lines += [
+                f"## {moment['timestamp']}",
+                "",
+                f'<img src="{rel_path}" alt="{path.name}" width="{THUMBNAIL_WIDTH}">',
+                "",
+                f"**逐字稿片段：** {excerpt}",
+                "",
+                f"**話題推測：** {reason}",
+                "",
+                "---",
+                "",
+            ]
+        index_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
         return index_path
 
 
