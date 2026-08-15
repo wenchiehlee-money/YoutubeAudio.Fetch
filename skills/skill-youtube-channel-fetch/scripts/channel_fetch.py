@@ -187,6 +187,11 @@ class ChannelFetcher:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode != 0:
+            # Plenty of channels simply don't have a /streams tab (e.g. ones that never
+            # livestream) — that's "zero entries", not a fetch failure, and shouldn't
+            # sink the /videos tab's results when both are queried together.
+            if "does not have a" in proc.stderr and "tab" in proc.stderr:
+                return [], ""
             raise RuntimeError(f"yt-dlp listing failed ({tab}): {proc.stderr[:500]}")
         data = json.loads(proc.stdout)
         channel_name = (
