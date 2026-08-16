@@ -12,7 +12,11 @@ whisper 轉錄 pipeline（`skill-mlx-api-server-whisper`），產出人工可校
 
 | 影片 | 日期 |
 | --- | --- |
+| [你的股票最後會留給誰？律師揭存股族最容易忽略的財產傳承觀念｜蘇家宏專訪 EP1](data/fubonsec/fubonsec_W_cLHLRD1m8_keyframes.md) | 2026-08-14 |
+| [AI零組件漲價潮再起？下半年受惠產業與ETF一次掌握｜富邦投顧 陶治瑋 副總《富邦說趨勢》 EP 92 eT富攻略](data/fubonsec/fubonsec_DfN9yS3xkuU_keyframes.md) | 2026-08-12 |
 | [破解股市利空虛實：台股已從反彈走向反轉？｜富邦投顧 陳奕光 董事長《富邦說趨勢》 EP 91](data/fubonsec/fubonsec_-KLEA_c88xI_keyframes.md) | 2026-08-07 |
+| [富邦證券授信開戶四合一](data/fubonsec/fubonsec_mhIgas9TsMU_keyframes.md) | 2026-08-06 |
+| [AI投資新選擇！KOSPI 50如何一次掌握韓國50大企業？\| 富邦Global Sight EP10](data/fubonsec/fubonsec_ehESBhQSWyM_keyframes.md) | 2026-08-05 |
 
 ### [游庭皓的財經皓角](data/yutinghaofinance/)
 
