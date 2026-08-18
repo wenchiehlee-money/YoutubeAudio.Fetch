@@ -9,10 +9,13 @@ Before touching audio/whisper at all, each video is checked for an official
 YouTube transcript via `youtube-transcript-api`, in a preferred language:
   - YouTube's own auto-generated captions -> written straight to FIN.srt
     (no better than whisper's own output, so not worth refining).
-  - Creator-uploaded (manual) captions -> written to GT.srt *and* a
-    provisional FIN.srt of the same content; `channel_fetch.py refine` can
-    later spend audio+Mac-mini time on task_type="refine_fin_srt" to have
-    the pipeline regenerate a properly formatted FIN.srt from that GT.
+  - Creator-uploaded (manual) captions -> written to GT.srt only. A stem
+    with a GT.srt and no FIN.srt is a complete, valid end state on its own
+    (downstream steps treat GT.srt as the source SRT when FIN.srt is
+    absent) — FIN.srt is written only once something has actually produced
+    a pipeline-scored transcript. `channel_fetch.py refine` can later spend
+    audio+Mac-mini time on task_type="refine_fin_srt" to have the pipeline
+    generate a real FIN.srt from that GT, if you want a CER-scored version.
 Either way the video skips the audio/manifest/whisper path entirely at fetch
 time — whisper's ~1-1.5h/video multi-experiment transcription is reserved for
 videos YouTube has no transcript for at all.
@@ -117,14 +120,6 @@ def _pseudo_srt_timestamp(total_seconds: float) -> str:
     return f"{minutes:02d}:{seconds:06.3f}"
 
 
-# Tag written into a provisional FIN.srt's [METADATA] "Source:" line when it was derived
-# directly from a manually-created YouTube transcript rather than the whisper pipeline.
-# request_refinement() scans for this exact suffix to find stems still awaiting a real
-# refine_fin_srt pass — once the Mac-mini pipeline overwrites FIN.srt, its own "Source:"
-# (an "_exp<N>" experiment tag) replaces this and the stem stops showing up in the scan.
-PROVISIONAL_SOURCE_SUFFIX = "_youtube-transcript-manual-provisional"
-
-
 def transcript_to_pseudo_srt(snippets: list[dict], stem: str, language_code: str, source_suffix: str) -> str:
     """Render youtube-transcript-api snippets ({text, start, duration}) into this repo's
     FIN.srt/GT.srt format — see data/*/*_FIN.srt for the format this mirrors."""
@@ -140,17 +135,6 @@ def transcript_to_pseudo_srt(snippets: list[dict], stem: str, language_code: str
             continue
         lines.append(f"({_pseudo_srt_timestamp(snip['start'])}) {text}")
     return "\n".join(lines) + "\n"
-
-
-def _srt_source_tag(srt_path: Path) -> str | None:
-    """Read just the [METADATA] "Source:" line of a pseudo-SRT file, or None if absent/unreadable."""
-    try:
-        for line in srt_path.read_text(encoding="utf-8-sig").splitlines()[:4]:
-            if line.startswith("Source:"):
-                return line[len("Source:"):].strip()
-    except OSError:
-        pass
-    return None
 
 
 class ChannelFetcher:
@@ -435,7 +419,8 @@ class ChannelFetcher:
                 stem = f"{channel_slug}_{video['video_id']}"
                 data_dir = self.repo_root / "data" / channel_slug
                 fin_path = data_dir / f"{stem}_FIN.srt"
-                if stem in manifest or fin_path.exists():
+                gt_path = data_dir / f"{stem}_GT.srt"
+                if stem in manifest or fin_path.exists() or gt_path.exists():
                     print(f"[channel_fetch] skip {stem} (already sourced)")
                     skipped += 1
                     continue
@@ -457,20 +442,17 @@ class ChannelFetcher:
                                 transcribed_auto += 1
                             else:
                                 # Creator-uploaded captions — close enough to ground truth to keep
-                                # as GT.srt. Also write a provisional FIN.srt (same content) so the
-                                # stem is immediately usable; `channel_fetch.py refine` can later
-                                # spend audio+Mac-mini time to have the pipeline regenerate a
-                                # properly formatted FIN.srt scored against this GT.
-                                gt_path = data_dir / f"{stem}_GT.srt"
+                                # as GT.srt. No FIN.srt is written here: a GT.srt with no FIN.srt
+                                # is itself a complete state (downstream steps use GT.srt as the
+                                # source SRT when FIN.srt is absent) — FIN.srt is reserved for an
+                                # actual pipeline-scored transcript. `channel_fetch.py refine` can
+                                # later spend audio+Mac-mini time to have the pipeline generate one
+                                # from this GT, if a CER-scored version is wanted.
                                 gt_path.write_text(
                                     transcript_to_pseudo_srt(raw, stem, transcript.language_code, "_youtube-transcript-manual"),
                                     encoding="utf-8",
                                 )
-                                fin_path.write_text(
-                                    transcript_to_pseudo_srt(raw, stem, transcript.language_code, PROVISIONAL_SOURCE_SUFFIX),
-                                    encoding="utf-8",
-                                )
-                                print(f"[channel_fetch] {stem}: manual YouTube transcript ({transcript.language_code}), wrote {gt_path} + provisional {fin_path} — run `refine` to have whisper pipeline regenerate FIN.srt from this GT")
+                                print(f"[channel_fetch] {stem}: manual YouTube transcript ({transcript.language_code}), wrote {gt_path} — run `refine` to have whisper pipeline generate a scored FIN.srt from this GT")
                                 transcribed_manual += 1
                             continue
 
@@ -506,19 +488,19 @@ class ChannelFetcher:
 
     # -- refinement of manual-transcript stems -------------------------------
 
-    def list_provisional_stems(self) -> list[tuple[str, Path]]:
-        """Find every {stem}_FIN.srt under data/ still tagged PROVISIONAL_SOURCE_SUFFIX —
-        i.e. derived straight from a manual YouTube transcript and never run through the
-        whisper pipeline's refine_fin_srt yet. Returns [(stem, fin_path), ...]."""
+    def list_unrefined_gt_stems(self) -> list[tuple[str, Path]]:
+        """Find every stem under data/ with a GT.srt but no FIN.srt yet — i.e. sourced
+        straight from a manual YouTube transcript and never run through the whisper
+        pipeline's refine_fin_srt. Returns [(stem, gt_path), ...]."""
         data_root = self.repo_root / "data"
         if not data_root.is_dir():
             return []
         found = []
-        for fin_path in sorted(data_root.glob("*/*_FIN.srt")):
-            stem = fin_path.name[: -len("_FIN.srt")]
-            tag = _srt_source_tag(fin_path)
-            if tag and tag.endswith(PROVISIONAL_SOURCE_SUFFIX):
-                found.append((stem, fin_path))
+        for gt_path in sorted(data_root.glob("*/*_GT.srt")):
+            stem = gt_path.name[: -len("_GT.srt")]
+            fin_path = gt_path.with_name(f"{stem}_FIN.srt")
+            if not fin_path.exists():
+                found.append((stem, gt_path))
         return found
 
     def request_refinement(
@@ -526,9 +508,10 @@ class ChannelFetcher:
         manifest_path: str | Path = "audio_manifest.json",
         stems: list[str] | None = None,
     ) -> dict[str, int]:
-        """For stems whose FIN.srt is still a provisional (transcript-derived) placeholder,
-        download+publish audio and open a refine_fin_srt request so the Mac-mini pipeline
-        regenerates FIN.srt from the existing GT.srt — without paying for a full
+        """For stems that have a GT.srt but no FIN.srt yet (i.e. sourced from a manual
+        YouTube transcript and never run through the whisper pipeline), download+publish
+        audio and open a refine_fin_srt request so the Mac-mini pipeline generates a real,
+        CER-scored FIN.srt from the existing GT.srt — without paying for a full
         multi-experiment transcription pass."""
         sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "skill-mlx-api-client-whisper" / "scripts"))
         from whisper_issue_client import WhisperIssueClient  # type: ignore
@@ -538,7 +521,7 @@ class ChannelFetcher:
         if manifest_path.exists():
             manifest = {k: v for k, v in json.loads(manifest_path.read_text(encoding="utf-8")).items() if not k.startswith("_")}
 
-        candidates = self.list_provisional_stems()
+        candidates = self.list_unrefined_gt_stems()
         if stems is not None:
             wanted = set(stems)
             candidates = [(s, p) for s, p in candidates if s in wanted]
@@ -547,7 +530,7 @@ class ChannelFetcher:
         requested = skipped = 0
         with tempfile.TemporaryDirectory(prefix="channel_fetch_refine_") as tmp:
             tmp_dir = Path(tmp)
-            for stem, fin_path in candidates:
+            for stem, gt_path in candidates:
                 video_id = stem.rsplit("_", 1)[-1]
                 audio_url = manifest.get(stem)
                 if not audio_url:
@@ -600,12 +583,12 @@ if __name__ == "__main__":
 
     refine_p = sub.add_parser(
         "refine",
-        help="For stems with a manual-transcript-derived provisional FIN.srt, download audio "
-             "and request the whisper pipeline regenerate FIN.srt from the existing GT.srt",
+        help="For stems with a GT.srt but no FIN.srt yet (manual-transcript-sourced), "
+             "download audio and request the whisper pipeline generate a real FIN.srt from that GT.srt",
     )
     refine_p.add_argument("--manifest", default="audio_manifest.json", help="Path to the manifest JSON")
     refine_p.add_argument("--stem", action="append", dest="stems", default=None,
-                           help="Limit to specific stem(s) (repeatable); default: all provisional stems")
+                           help="Limit to specific stem(s) (repeatable); default: all unrefined GT-only stems")
 
     args = parser.parse_args()
     fetcher = ChannelFetcher()

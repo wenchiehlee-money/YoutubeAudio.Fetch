@@ -76,10 +76,10 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
 
 1. 對 `channels.json` 裡列的每個頻道跑 `channel_fetch.py fetch <url> --limit 5 --sync`，
    抓新影片、寫逐字稿/manifest、觸發 whisper
-2. 對每個「有 `FIN.srt` 但還沒有 `_keyframes.md`」的 stem 跑
-   `skill-youtube-channel-srt-keyframe-extract`，補齊關鍵畫面擷取（每支重試一次；YouTube
-   端偶發限流導致某支失敗不會擋住其他支，會留到隔天的排程自動重試，因為判斷條件就是
-   「還沒有 `_keyframes.md`」）
+2. 對每個「有 `FIN.srt`（沒有的話退而求其次用 `GT.srt`）但還沒有 `_keyframes.md`」的
+   stem 跑 `skill-youtube-channel-srt-keyframe-extract`，補齊關鍵畫面擷取（每支重試一次；
+   YouTube 端偶發限流導致某支失敗不會擋住其他支，會留到隔天的排程自動重試，因為判斷條件
+   就是「還沒有 `_keyframes.md`」）
 3. 重新產生 README「內容索引」並 commit——新影片跑完關鍵畫面擷取後就會自動出現在這裡
 
 也可用 `workflow_dispatch` 手動觸發並自訂 `limit`。要追蹤新頻道，直接編輯 `channels.json`

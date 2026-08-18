@@ -88,9 +88,19 @@ jobs:
           import sys
           from pathlib import Path
 
+          # A stem is "ready to extract keyframes from" once it has EITHER a FIN.srt
+          # (whisper-pipeline-scored) or, absent that, a GT.srt on its own (sourced
+          # directly from an official YouTube manual transcript — channel_fetch.py
+          # doesn't write a FIN.srt for those unless/until `refine` is run). Prefer
+          # FIN.srt as the source when both exist.
+          srt_by_stem = {}
+          for gt in sorted(Path("data").glob("*/*_GT.srt")):
+              srt_by_stem[gt.name[: -len("_GT.srt")]] = gt
           for fin in sorted(Path("data").glob("*/*_FIN.srt")):
-              stem = fin.name[: -len("_FIN.srt")]
-              md_path = fin.with_name(f"{stem}_keyframes.md")
+              srt_by_stem[fin.name[: -len("_FIN.srt")]] = fin
+
+          for stem, srt in sorted(srt_by_stem.items()):
+              md_path = srt.with_name(f"{stem}_keyframes.md")
               if md_path.exists():
                   continue
               video_id = stem.rsplit("_", 1)[-1]
@@ -101,7 +111,7 @@ jobs:
                   proc = subprocess.run([
                       sys.executable,
                       "skills/skill-youtube-channel-srt-keyframe-extract/scripts/keyframe_extract.py",
-                      "extract", stem, "--srt", str(fin), "--video-url", video_url,
+                      "extract", stem, "--srt", str(srt), "--video-url", video_url,
                   ])
                   if proc.returncode == 0:
                       ok = True
