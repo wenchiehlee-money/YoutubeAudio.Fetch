@@ -207,42 +207,46 @@ class KeyframeExtractor:
     def extract(self, stem: str, srt_path: str | Path, video_url: str, out_dir: str | Path | None = None) -> list[Path]:
         srt_path = Path(srt_path)
         cues = parse_srt(srt_path)
-        moments = self.find_key_moments(cues)
-        if not moments:
-            print(f"[keyframe_extract] no key visual moments found in {srt_path}")
-            return []
-        moments = sorted(moments, key=lambda m: m["timestamp"])
+        moments = sorted(self.find_key_moments(cues), key=lambda m: m["timestamp"])
 
         out_dir = Path(out_dir) if out_dir else srt_path.parent / f"{stem}_keyframes"
-        out_dir.mkdir(parents=True, exist_ok=True)
 
         saved: list[Path] = []
         kept_moments: list[dict] = []
         skipped_duplicates = 0
-        with tempfile.TemporaryDirectory(prefix="keyframe_extract_") as tmp:
-            tmp_dir = Path(tmp)
-            print(f"[keyframe_extract] downloading video for {stem} ({len(moments)} moment(s) to capture)")
-            video_path = self.download_video(video_url, tmp_dir)
-            last_hash: int | None = None
-            for moment in moments:
-                ts = moment["timestamp"]
-                ts_compact = ts.replace(":", "")
-                out_path = out_dir / f"{stem}_{ts_compact}.png"
-                self.grab_frame(video_path, ts, out_path)
+        if moments:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.TemporaryDirectory(prefix="keyframe_extract_") as tmp:
+                tmp_dir = Path(tmp)
+                print(f"[keyframe_extract] downloading video for {stem} ({len(moments)} moment(s) to capture)")
+                video_path = self.download_video(video_url, tmp_dir)
+                last_hash: int | None = None
+                for moment in moments:
+                    ts = moment["timestamp"]
+                    ts_compact = ts.replace(":", "")
+                    out_path = out_dir / f"{stem}_{ts_compact}.png"
+                    self.grab_frame(video_path, ts, out_path)
 
-                frame_hash = _average_hash(out_path)
-                if last_hash is not None and _hamming_distance(frame_hash, last_hash) <= DUPLICATE_HASH_THRESHOLD:
-                    print(f"[keyframe_extract]   {ts} — skipped (duplicate of previous kept frame)")
-                    out_path.unlink(missing_ok=True)
-                    skipped_duplicates += 1
-                    continue
+                    frame_hash = _average_hash(out_path)
+                    if last_hash is not None and _hamming_distance(frame_hash, last_hash) <= DUPLICATE_HASH_THRESHOLD:
+                        print(f"[keyframe_extract]   {ts} — skipped (duplicate of previous kept frame)")
+                        out_path.unlink(missing_ok=True)
+                        skipped_duplicates += 1
+                        continue
 
-                last_hash = frame_hash
-                print(f"[keyframe_extract]   {ts} — {moment.get('reason', '')}")
-                saved.append(out_path)
-                kept_moments.append(moment)
-            # video_path lives in the TemporaryDirectory; it is removed on context exit.
+                    last_hash = frame_hash
+                    print(f"[keyframe_extract]   {ts} — {moment.get('reason', '')}")
+                    saved.append(out_path)
+                    kept_moments.append(moment)
+                # video_path lives in the TemporaryDirectory; it is removed on context exit.
+        else:
+            print(f"[keyframe_extract] no key visual moments found in {srt_path}")
 
+        # Always write the index, even with zero screenshots — this stem's *_keyframes.md
+        # is the daily workflow's and generate_readme_index.py's "already processed" marker.
+        # Returning early here (as a previous version did) left "boring" videos (no LLM-detected
+        # chart moments) permanently missing from README: the workflow retries any stem without
+        # a _keyframes.md every single day, forever, and it never gets one.
         index_path = self._write_index_md(stem, srt_path, video_url, out_dir, kept_moments, saved, cues)
         print(
             f"[keyframe_extract] done. saved {len(saved)} PNG(s) "
