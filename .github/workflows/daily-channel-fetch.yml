@@ -27,7 +27,13 @@ jobs:
           node-version: '24'
 
       - name: Install fetch dependencies
-        run: pip install requests python-dotenv yt-dlp youtube-transcript-api
+        # ffmpeg is needed here already, not just for keyframe extraction later:
+        # channel_fetch.py's yt-dlp call uses `-x --audio-format m4a`, which shells
+        # out to ffmpeg for post-processing.
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg
+          pip install requests python-dotenv yt-dlp youtube-transcript-api
 
       - name: Prepare YouTube cookies
         env:
@@ -64,14 +70,12 @@ jobs:
 
       - name: Install keyframe-extraction dependencies
         timeout-minutes: 10
-        # Only skill-youtube-channel-srt-keyframe-extract needs these — not
+        # ffmpeg is already installed in "Install fetch dependencies" above. Only
+        # skill-youtube-channel-srt-keyframe-extract needs these pip packages — not
         # `pip install -r requirements.txt`, whose `-e ../llm` only resolves on a dev
         # machine with the sibling llm repo checked out locally. In CI, install the
         # same package straight from GitHub instead.
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y ffmpeg
-          pip install Pillow "llm @ git+https://github.com/wenchiehlee/llm.git"
+        run: pip install Pillow "llm @ git+https://github.com/wenchiehlee/llm.git"
 
       - name: Extract keyframes for videos missing a _keyframes.md
         env:
