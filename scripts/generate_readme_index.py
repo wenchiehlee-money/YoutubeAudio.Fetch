@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from datetime import datetime
@@ -32,6 +33,13 @@ HEADER = "## 內容索引"
 VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}$")
 
 YT_DLP_ARGS = ["--js-runtimes", "node", "--remote-components", "ejs:github"]
+
+
+def yt_dlp_cookie_args() -> list[str]:
+    cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE")
+    if cookies_file:
+        return ["--cookies", cookies_file]
+    return []
 
 
 def load_cache() -> dict[str, dict[str, str]]:
@@ -53,7 +61,8 @@ def fetch_video_meta(video_id: str) -> dict[str, str] | None:
     channel_name is the channel's real display name (e.g. "游庭皓的財經皓角"), not our
     URL-handle-derived slug (e.g. "yutinghaofinance") — used for a more readable header."""
     proc = subprocess.run(
-        ["yt-dlp", *YT_DLP_ARGS, "--skip-download", "--print", "%(title)s|||%(upload_date)s|||%(channel)s",
+        ["yt-dlp", *YT_DLP_ARGS, *yt_dlp_cookie_args(), "--skip-download", "--print",
+         "%(title)s|||%(upload_date)s|||%(channel)s",
          f"https://www.youtube.com/watch?v={video_id}"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
