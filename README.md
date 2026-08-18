@@ -97,9 +97,9 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
   環境連不到僅限內網/Tailscale 的 `MLX_API_URL`，所以沒設 mlx 相關 secrets，鏈路會直接
   落到 codex/gemini 其中之一）
 
-手動字幕產生的「暫定版 FIN.srt」（`refine` 之前的版本）也會照常被拿去做關鍵畫面擷取——
-截圖跟逐字稿片段仍然有效，之後若跑了 `refine` 讓 Mac-mini pipeline 重新產出正式版
-`FIN.srt`，可以再手動重跑一次關鍵畫面擷取讓內容更新。
+手動字幕來源、只有 `GT.srt` 沒有 `FIN.srt` 的 stem，也會照常被拿去做關鍵畫面擷取（找不到
+`FIN.srt` 時改用 `GT.srt` 當來源）——截圖跟逐字稿片段仍然有效，之後若跑了 `refine` 讓
+Mac-mini pipeline 產出正式版 `FIN.srt`，可以再手動重跑一次關鍵畫面擷取讓內容更新。
 
 ## 詳細設計
 
