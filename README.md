@@ -22,13 +22,13 @@ whisper 轉錄 pipeline（`skill-mlx-api-server-whisper`），產出人工可校
 
 | 影片 | 日期 |
 | --- | --- |
+| [2026/8/18(二)美股買盤停止追高 散戶等回檔?台灣游資氾濫 普發成常態?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_aRPmzQfTLFc_keyframes.md) | 2026-08-18 |
+| [2026/8/17(一)指數創高 回檔等加碼?美課100%關稅 無人機大戰開打!【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_OJ5vxmwQrE0_keyframes.md) | 2026-08-17 |
 | [2026/8/14(五)AI股不再雞犬升天 債市開始算帳!AI帳單 誰會來買單?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_oLPxNHRAPEI_keyframes.md) | 2026-08-14 |
 | [2026/8/13(四)通膨退一步 股市進兩步?情緒轉彎 槓桿資金回來了?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_KS_BkfqfALI_keyframes.md) | 2026-08-13 |
 | [2026/8/12(三)GPU金融化狂潮 2008正在重演？兆元商機還是下一場危機？【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_ApykW90PQ58_keyframes.md) | 2026-08-12 |
 | [2026/8/11(二)AI舉債時代 自由現金流能翻正?外資再加空單!台股還能攻?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_v7TpiWK5DTQ_keyframes.md) | 2026-08-11 |
 | [2026/8/10(一)非農爆冷 升息機率降?美股創高!波克夏也開始買股了?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_5_poweJsVBA_keyframes.md) | 2026-08-10 |
-| [yutinghaofinance_OJ5vxmwQrE0](data/yutinghaofinance/yutinghaofinance_OJ5vxmwQrE0_keyframes.md) |  |
-| [yutinghaofinance_aRPmzQfTLFc](data/yutinghaofinance/yutinghaofinance_aRPmzQfTLFc_keyframes.md) |  |
 
 ## 目錄慣例
 ```
