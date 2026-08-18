@@ -7,7 +7,7 @@ description: 從 YouTube 財經頻道下載最新影片，優先嘗試官方逐�
 
 | 項目 | 內容 |
 | :--- | :--- |
-| 版本 | 1.3.0（詳見 `metadata.json`） |
+| 版本 | 1.4.0（詳見 `metadata.json`） |
 | 登錄庫 | https://github.com/wenchiehlee/skills （`common/skill-youtube-channel-fetch`） |
 | 維護者 | wenchiehlee |
 | 對應下游 | `skill-mlx-api-client-whisper`（消費本技能寫入的 `audio_manifest.json`，及本技能 `refine` 直接呼叫的 `open_fin_request`） |
@@ -17,8 +17,11 @@ description: 從 YouTube 財經頻道下載最新影片，優先嘗試官方逐�
 `skill-mlx-api-client-whisper` 只負責「manifest 裡已經有 audio_url 的 stem」開 issue 觸發轉錄——
 它不負責從 YouTube 頻道抓新影片。本技能補上這一段：
 
-1. 用 `yt-dlp` 列出頻道影片，預設「最新 N 支」（合併 `/videos` + `/streams` 兩個 tab，由新到
-   舊排序——像每日直播存檔這類頻道，日常內容大多發佈在 `/streams`，只查 `/videos` 會漏掉）；
+1. 用 `yt-dlp` 列出頻道影片，預設「最新 N 支」。**只有在傳入不帶 `/videos`／`/streams`
+   後綴的裸頻道網址時，才會合併 `/videos` + `/streams` 兩個 tab**（由新到舊排序——像每日
+   直播存檔這類頻道，日常內容大多發佈在 `/streams`，只查 `/videos` 會漏掉）；若網址本身已
+   明確帶 `/videos` 或 `/streams` 後綴，就只查那一個 tab（例如目前 `channels.json` 裡
+   `yutinghaofinance` 就是固定指到 `.../streams`，只掃 streams tab，不會合併 `/videos`）。
    也可以改成「日期區間」模式（見下方方式 E），抓某段期間內的全部影片
 2. 對每支尚未出現在 manifest、也還沒有本地 `FIN.srt` 或 `GT.srt` 的影片，**先用
    `youtube-transcript-api` 查詢 YouTube 官方逐字稿**，依 `DEFAULT_TRANSCRIPT_LANGUAGES`
