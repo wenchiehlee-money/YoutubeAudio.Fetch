@@ -76,6 +76,13 @@ VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 YT_DLP_JS_RUNTIME_ARGS = ["--js-runtimes", "node", "--remote-components", "ejs:github"]
 
 
+def yt_dlp_cookie_args() -> list[str]:
+    cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE")
+    if cookies_file:
+        return ["--cookies", cookies_file]
+    return []
+
+
 HANDLE_IN_URL_RE = re.compile(r"youtube\.com/@([A-Za-z0-9._-]+)", re.IGNORECASE)
 
 
@@ -183,7 +190,7 @@ class ChannelFetcher:
         one tab's response and may be empty for a tab with zero entries."""
         url = channel_url.rstrip("/") + f"/{tab}"
         proc = subprocess.run(
-            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, "--flat-playlist", "--playlist-end", str(limit), "-J", url],
+            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, *yt_dlp_cookie_args(), "--flat-playlist", "--playlist-end", str(limit), "-J", url],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
         if proc.returncode != 0:
@@ -215,7 +222,7 @@ class ChannelFetcher:
         such a video sorts last / is excluded from date-range filtering rather than
         crashing the whole channel fetch."""
         proc = subprocess.run(
-            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, "--skip-download", "--print", "%(timestamp)s",
+            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, *yt_dlp_cookie_args(), "--skip-download", "--print", "%(timestamp)s",
              f"https://www.youtube.com/watch?v={video_id}"],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
         )
@@ -336,7 +343,7 @@ class ChannelFetcher:
         out_template = str(dest_dir / f"{video_id}.%(ext)s")
         proc = subprocess.run(
             [
-                "yt-dlp", *YT_DLP_JS_RUNTIME_ARGS,
+                "yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, *yt_dlp_cookie_args(),
                 "-x", "--audio-format", "m4a", "--audio-quality", "0",
                 "-o", out_template,
                 f"https://www.youtube.com/watch?v={video_id}",

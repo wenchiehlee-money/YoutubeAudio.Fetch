@@ -29,6 +29,16 @@ jobs:
       - name: Install fetch dependencies
         run: pip install requests python-dotenv yt-dlp youtube-transcript-api
 
+      - name: Prepare YouTube cookies
+        env:
+          YOUTUBE_COOKIES_B64: ${{ secrets.YOUTUBE_COOKIES_B64 }}
+        run: |
+          if [ -n "$YOUTUBE_COOKIES_B64" ]; then
+            printf '%s' "$YOUTUBE_COOKIES_B64" | base64 -d > youtube-cookies.txt
+            chmod 600 youtube-cookies.txt
+            echo "YOUTUBE_COOKIES_FILE=$PWD/youtube-cookies.txt" >> "$GITHUB_ENV"
+          fi
+
       - name: Fetch each tracked channel
         env:
           WHISPER_SOURCE_REPO: wenchiehlee-money/YoutubeAudio.Fetch

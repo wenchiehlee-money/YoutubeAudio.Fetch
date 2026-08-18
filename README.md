@@ -84,6 +84,8 @@ data/{channel}/{channel}_{video_id}_FIN.srt  # pipeline 依 CER 挑選出的最�
 加一行 URL 即可，不用改 workflow。
 
 此 workflow 需要在 repo 的 GitHub Actions Secrets 設定：
+- `YOUTUBE_COOKIES_B64`：YouTube cookies.txt 內容的 base64 編碼；給 `yt-dlp` 通過
+  YouTube「Sign in to confirm you’re not a bot」檢查用
 - `REPO_FILE_SYNC_WENCHIEHLEE_MONEY`：對本 repo `Contents: Read and write`（發布音訊 Release、
   push commit）
 - `REPO_FILE_SYNC_ZHONGZHENG782_MONEY`：對 `WHISPER_TARGET_REPO`（Mac-mini repo）

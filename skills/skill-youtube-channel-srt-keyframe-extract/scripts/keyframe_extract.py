@@ -21,6 +21,7 @@ Usage (module):
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import subprocess
 import sys
@@ -47,6 +48,13 @@ from llm import LLMClient
 # relying on the one bundled in the current release, which cuts down (but doesn't fully
 # eliminate — YouTube's anti-bot behavior is itself flaky) the plain 403s seen without it.
 YT_DLP_JS_RUNTIME_ARGS = ["--js-runtimes", "node", "--remote-components", "ejs:github"]
+
+
+def yt_dlp_cookie_args() -> list[str]:
+    cookies_file = os.environ.get("YOUTUBE_COOKIES_FILE")
+    if cookies_file:
+        return ["--cookies", cookies_file]
+    return []
 
 # Despite the ".srt" filename, skill-mlx-api-server-whisper's FIN.srt/GT.srt is NOT
 # standard SubRip: an optional "[METADATA]\n...\n---\n" header, then one cue per line
@@ -174,7 +182,7 @@ class KeyframeExtractor:
     def download_video(self, video_url: str, dest_dir: Path) -> Path:
         out_template = str(dest_dir / "video.%(ext)s")
         proc = subprocess.run(
-            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS,
+            ["yt-dlp", *YT_DLP_JS_RUNTIME_ARGS, *yt_dlp_cookie_args(),
              "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/best",
              "--merge-output-format", "mp4", "-o", out_template, video_url],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
