@@ -27,6 +27,8 @@ whisper 轉錄 pipeline（`skill-mlx-api-server-whisper`），產出人工可校
 | [2026/8/12(三)GPU金融化狂潮 2008正在重演？兆元商機還是下一場危機？【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_ApykW90PQ58_keyframes.md) | 2026-08-12 |
 | [2026/8/11(二)AI舉債時代 自由現金流能翻正?外資再加空單!台股還能攻?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_v7TpiWK5DTQ_keyframes.md) | 2026-08-11 |
 | [2026/8/10(一)非農爆冷 升息機率降?美股創高!波克夏也開始買股了?【早晨財經速解讀】](data/yutinghaofinance/yutinghaofinance_5_poweJsVBA_keyframes.md) | 2026-08-10 |
+| [yutinghaofinance_OJ5vxmwQrE0](data/yutinghaofinance/yutinghaofinance_OJ5vxmwQrE0_keyframes.md) |  |
+| [yutinghaofinance_aRPmzQfTLFc](data/yutinghaofinance/yutinghaofinance_aRPmzQfTLFc_keyframes.md) |  |
 
 ## 目錄慣例
 ```
